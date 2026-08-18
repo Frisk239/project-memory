@@ -1,6 +1,6 @@
 ---
 name: project-memory
-description: Shared project memory. Use after finishing a non-trivial task (decision, constraint, shipped status), when the user says remember/forget/记住, corrects you, or confirms an approach. Also use at session start to read the index. Not every turn.
+description: Shared project memory. Use after finishing a non-trivial task, when the user says remember/forget/记住/忘掉, or corrects a remembered fact (不对/其实是/作废). Also use at session start to read the index. Not every turn.
 ---
 
 Write only when a future session would otherwise re-learn it. Not every turn.
@@ -8,6 +8,18 @@ Write only when a future session would otherwise re-learn it. Not every turn.
 ## After a non-trivial task
 
 If this turn finished a decision, constraint, or shipped status, `memory_write`. Update the same slug instead of duplicating. If nothing durable, skip.
+
+## Correct
+
+Recalled memories are snapshots and can be wrong. If the user contradicts one:
+
+| they say | do |
+|---|---|
+| 不对 / 其实是 / 改成 | `memory_search` → `memory_write` the same slug |
+| 忘掉 / 作废 / forget | `memory_forget` |
+| topic split | new slug + `memory_forget` the old one |
+
+Never leave two entries that disagree. Confirm the slug you changed.
 
 ## Types
 
