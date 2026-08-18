@@ -1,0 +1,31 @@
+{
+  "description": "Project memory hooks (merged into ~/.codex/hooks.json by install).",
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume|clear|compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node dist/cli.js hook",
+            "statusMessage": "Loading project memory",
+            "timeout": 5,
+            "additionalContextLimit": 2500
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node dist/cli.js hook",
+            "statusMessage": "Project memory write reminder",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  }
+}

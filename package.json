@@ -1,0 +1,43 @@
+{
+  "name": "project-memory",
+  "version": "0.1.0",
+  "description": "Shared project-scoped markdown memory for OpenCode, ZCode, Codex, Claude, Kiro, Command Code, Gemini/Antigravity, and Grok",
+  "type": "module",
+  "license": "MIT",
+  "bin": {
+    "project-memory": "./dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "skills",
+    "adapters",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "tsc",
+    "prepare": "tsc",
+    "test": "tsc && node --test dist/store.test.js dist/hooks.test.js",
+    "start": "node dist/cli.js",
+    "install-agents": "node dist/cli.js install"
+  },
+  "keywords": [
+    "mcp",
+    "memory",
+    "opencode",
+    "zcode",
+    "codex",
+    "coding-agent"
+  ],
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.12.1",
+    "zod": "^3.25.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.0",
+    "typescript": "^5.8.0"
+  }
+}

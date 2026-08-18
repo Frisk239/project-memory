@@ -1,0 +1,5 @@
+{
+  "name": "project-memory",
+  "version": "0.1.0",
+  "description": "Shared project memory: inject MEMORY.md at session start"
+}
