@@ -1,13 +1,13 @@
 ---
 name: project-memory
-description: Shared project memory. MUST USE after finishing a non-trivial task (decision, constraint, shipped status), when the user says remember/forget/记住, corrects you, or confirms an approach. Also use at session start to read the index.
+description: Shared project memory. Use after finishing a non-trivial task (decision, constraint, shipped status), when the user says remember/forget/记住, corrects you, or confirms an approach. Also use at session start to read the index. Not every turn.
 ---
 
-You write memories yourself with `memory_write`. Do not wait to be asked.
+Write only when a future session would otherwise re-learn it. Not every turn.
 
 ## After a non-trivial task
 
-Before you stop: if a future session would otherwise re-learn this, `memory_write` now. Update the same slug instead of duplicating.
+If this turn finished a decision, constraint, or shipped status, `memory_write`. Update the same slug instead of duplicating. If nothing durable, skip.
 
 ## Types
 

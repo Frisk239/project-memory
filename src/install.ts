@@ -339,7 +339,6 @@ import { join } from "node:path";
 
 const CLI = ${JSON.stringify(CLI)};
 const LOG = join(homedir(), ".project-memory", "opencode-hook.log");
-const recalled = new Set();
 
 function log(message) {
   try {
@@ -363,18 +362,15 @@ export const ProjectMemory = async ({ directory, worktree }) => {
   return {
     "experimental.chat.system.transform": async (input, output) => {
       const id = input?.sessionID || "default";
-      if (recalled.has(id)) return;
       const text = sessionContext(cwd);
       log("recall session=" + id + " len=" + text.length);
       if (text && Array.isArray(output.system)) output.system.splice(1, 0, text);
-      recalled.add(id);
     },
     "experimental.session.compacting": async (input, output) => {
       const id = input?.sessionID || "default";
       const text = sessionContext(cwd);
       log("compact session=" + id);
       if (text) output.context.push(text);
-      recalled.delete(id);
     },
     event: async ({ event }) => {
       const type = event?.type;

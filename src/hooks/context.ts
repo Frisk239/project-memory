@@ -1,12 +1,10 @@
 import { memoryDir } from "../core/paths.js";
 import { readIndexText } from "../core/store.js";
 
-const WRITE_RULES = `You write memories yourself with memory_write. Do not wait to be asked.
-Write after: user says remember/记住; user corrects you or confirms a non-obvious approach; you finish a non-trivial task (decision, constraint, shipped status); user points at an external doc/URL.
-Types: user (who they are) · feedback (how to work, include why) · project (goals/status/constraints not in git; use absolute dates) · reference (external pointers).
-Skip: code structure, git history, AGENTS.md/CLAUDE.md, one-off chatter. Same slug = update. Body: fact + Why + How to apply.`;
+const WRITE_RULES = `Write with memory_write only when a future session would otherwise re-learn it: remember/记住; a correction or confirmed approach; a finished decision/constraint/shipped status; an external URL. Not every turn.
+Types: user · feedback · project · reference. Skip code, git, AGENTS.md, chatter. Same slug = update.`;
 
-const WRITE_REMINDER = `This turn is ending. If it finished a non-trivial task, or the user corrected/confirmed you, call memory_write now. Skip if nothing durable.`;
+const WRITE_REMINDER = `If this turn actually finished something durable, memory_write it. Otherwise do nothing.`;
 
 export function sessionContext(cwd?: string): string {
   const index = readIndexText(cwd).trim();

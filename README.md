@@ -46,9 +46,8 @@ node dist/cli.js install --agents opencode
 
 - **MCP** `project-memory`: `memory_index` / `memory_read` / `memory_search` / `memory_write` / `memory_forget` / `memory_list`
 - **Hooks** (same semantics on every host):
-  - **Read** at session start / resume / clear / compact — not on every user message
-  - **Write reminder** when the turn stops (ZCode/Codex `Stop`; OpenCode carries the write rule in the start inject)
-  - OpenCode plugin: first `system.transform` per session + `session.compacting`
+  - **Read** at session start / resume / clear / compact (OpenCode: every model call, so the index stays in the rebuilt system prompt)
+  - **Write** only when durable — not every turn. Stop/idle says: if nothing durable, do nothing.
 - **Skill** `project-memory`: when to read / write / what not to store
 
 ## Usage

@@ -29,7 +29,7 @@ test("Stop injects write reminder only", () => {
   const out = handleHook({ hook_event_name: "Stop" });
   assert.ok(out);
   assert.match(out.hookSpecificOutput.additionalContext, /memory_write/);
-  assert.match(out.hookSpecificOutput.additionalContext, /ending/);
+  assert.match(out.hookSpecificOutput.additionalContext, /do nothing/i);
   assert.doesNotMatch(out.hookSpecificOutput.additionalContext, /MEMORY\.md/);
 });
 
@@ -46,5 +46,5 @@ test("agentSpawn aliases SessionStart and SessionEnd aliases Stop", () => {
   assert.match(start.hookSpecificOutput.additionalContext, /Project memory/);
   const end = handleHook({ hook_event_name: "SessionEnd" });
   assert.ok(end);
-  assert.match(end.hookSpecificOutput.additionalContext, /ending/);
+  assert.match(end.hookSpecificOutput.additionalContext, /do nothing/i);
 });
