@@ -1,13 +1,13 @@
 ---
 name: project-memory
-description: Shared project memory. Use after finishing a non-trivial task, when the user says remember/forget/记住/忘掉, or corrects a remembered fact (不对/其实是/作废). Also use at session start to read the index. Not every turn.
+description: Shared project memory. Use after finishing a non-trivial task, when the user says remember/forget/记住/忘掉, or corrects a remembered fact (不对/其实是/作废). New valuable topics get a new file. Also use at session start to read the index.
 ---
 
-Write only when a future session would otherwise re-learn it. Not every turn.
+Write when a future session would re-learn it. Do not spam. A new valuable topic gets a **new file**. Same slug only when it is the same topic or a correction.
 
 ## After a non-trivial task
 
-If this turn finished a decision, constraint, or shipped status, `memory_write`. Update the same slug instead of duplicating. If nothing durable, skip.
+If this turn finished a decision, constraint, or shipped status that is not already a memory, `memory_write` a new slug. If it is the same topic, update that slug. If nothing worth keeping, skip.
 
 ## Correct
 
