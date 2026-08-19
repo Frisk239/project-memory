@@ -1,17 +1,25 @@
 ---
 name: project-memory
-description: Shared project memory. Use after finishing a non-trivial task, when the user says remember/forget/记住/忘掉, or corrects a remembered fact (不对/其实是/作废). New valuable topics get a new file. Also use at session start to read the index.
+description: Shared project memory. Use after finishing a non-trivial task, after research/exploration/调研 with reusable findings, when the user says remember/forget/记住/忘掉, or corrects a remembered fact (不对/其实是/作废). New valuable topics may get a new file — not required for every task. Also use at session start to read the index.
 ---
 
-Write when a future session would re-learn it. Do not spam. A new valuable topic gets a **new file**. Same slug only when it is the same topic or a correction.
+Write when the next session would otherwise redo the work. Empty `.memory` is normal. Do not spam. Existing files are not a cap. A new valuable topic **may** get a new file — not required for every new task. Same slug only for the same topic or a correction.
 
-## After a non-trivial task
+## When to write
 
-If this turn finished a decision, constraint, or shipped status that is not already a memory, `memory_write` a new slug. If it is the same topic, update that slug. If nothing worth keeping, skip.
+| trigger | action |
+|---|---|
+| new task / goal / current direction | allowed to open a new `project` file if worth keeping; not mandatory |
+| finished a decision, constraint, or shipped status | new file, or update that slug |
+| research / 调研 / exploration with findings that would be costly to redo | allowed to write a new `project` or `reference` file |
+| remember / 记住 | write immediately |
+| 不对 / 其实是 / 忘掉 / 作废 | correct (below) |
+
+Do not wait until a fact is "stable across many sessions". Multi-source research and non-obvious task context are worth keeping now.
 
 ## Correct
 
-Recalled memories are snapshots and can be wrong. If the user contradicts one:
+Recalled memories are snapshots and can be wrong.
 
 | they say | do |
 |---|---|
@@ -25,18 +33,18 @@ Never leave two entries that disagree. Confirm the slug you changed.
 
 | type | when_to_save |
 |---|---|
-| user | you learn who they are, their role, standing preferences |
-| feedback | they correct you ("don't", "stop") OR confirm a non-obvious approach |
-| project | goals, constraints, progress not in git; convert relative dates to absolute |
-| reference | they point at an external URL, wiki, ticket, dashboard |
+| user | who they are, role, standing preferences |
+| feedback | they correct you OR confirm a non-obvious approach |
+| project | goals, current task, constraints, shipped status, research conclusions not in git |
+| reference | external URL, wiki, ticket, dashboard |
 
-Skip: code structure, git history, AGENTS.md/CLAUDE.md, one-off chatter.
+Skip: code structure, git history, AGENTS.md/CLAUDE.md, one-off chatter. If they ask to save a list that is already in the repo, keep only what was surprising.
 
 Body: the fact, **Why**, **How to apply**.
 
 ## Read
 
-`memory_index` at session start / after compact. `memory_read` a topic before acting on it.
+`memory_index` at session start / after compact. `memory_read` a topic before acting on it. Empty index: do not invent memories; write the first one when something durable appears.
 
 ## Tools
 

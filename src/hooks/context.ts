@@ -1,11 +1,11 @@
 import { memoryDir } from "../core/paths.js";
 import { readIndexText } from "../core/store.js";
 
-const WRITE_RULES = `Write with memory_write when a future session would re-learn it: remember/记住; a correction or confirmed approach; a finished decision/constraint/shipped status; an external URL. New topic of value → new file. Same topic or a correction → same slug. Do not spam, but do write when it is worth keeping.
-Recalled memories can be wrong. If the user corrects one (不对/其实是/忘掉/作废), memory_search then update that slug or memory_forget — never leave two conflicting entries.
-Types: user · feedback · project · reference. Skip code, git, AGENTS.md, chatter.`;
+const WRITE_RULES = `Write with memory_write when the next session would otherwise redo the work. Allowed, not required: a new task/goal may get a new file if it is worth keeping; existing files are not a cap. Same topic or a correction → same slug. Also write: remember/记住; confirmed approach; finished decision/constraint/shipped status; research/exploration findings; external URL. Empty .memory is fine.
+Do not wait for "stable across many sessions". Recalled memories can be wrong: 不对/其实是/忘掉/作废 → search then update or forget, never two conflicting entries.
+Types: user · feedback · project · reference. Skip what the repo already records (code, git, AGENTS.md).`;
 
-const WRITE_REMINDER = `If this turn produced a new durable topic, memory_write a new file. If it updated an existing one, overwrite that slug. If the user corrected a memory, search and update or forget. If nothing worth keeping, do nothing.`;
+const WRITE_REMINDER = `If this turn left something worth keeping (including a new task that is a new topic), you may memory_write a new file or update a slug. Not required. If the user corrected a memory, search and update or forget. If nothing worth keeping, do nothing.`;
 
 export function sessionContext(cwd?: string): string {
   const index = readIndexText(cwd).trim();
