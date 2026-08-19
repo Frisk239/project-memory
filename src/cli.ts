@@ -21,7 +21,7 @@ async function dispatch(cmd: string, rest: string[]): Promise<void> {
   const cwd = flag(rest, "--cwd") || process.cwd();
   switch (cmd) {
     case "hook":
-      return runHook();
+      return runHook(rest);
     case "inject":
       return print(sessionContext(cwd));
     case "index":
@@ -92,13 +92,11 @@ async function dispatch(cmd: string, rest: string[]): Promise<void> {
   }
 }
 
-function runHook(): void {
+function runHook(rest: string[]): void {
+  const event = flag(rest, "--event");
   const raw = readFileSync(0, "utf8").trim();
-  if (!raw) {
-    process.stdout.write("{}\n");
-    return;
-  }
-  const input = JSON.parse(raw) as HookInput;
+  const input = (raw ? JSON.parse(raw) : {}) as HookInput;
+  if (event) input.hook_event_name = event;
   const output = handleHook(input);
   process.stdout.write(`${JSON.stringify(output ?? {})}\n`);
 }

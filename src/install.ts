@@ -31,6 +31,7 @@ export function doctorAgents(): string {
   ok("claude hooks", jsonHas(join(homedir(), ".claude", "settings.json"), MARKER), "");
   ok("claude mcp", jsonHas(join(homedir(), ".claude.json"), "project-memory"), "");
   ok("kiro mcp", jsonHas(join(homedir(), ".kiro", "settings", "mcp.json"), "project-memory"), "");
+  ok("kiro agent hooks", jsonHas(join(homedir(), ".kiro", "agents", "engineer.md"), "agentSpawn"), "");
   ok("commandcode mcp", jsonHas(join(homedir(), ".commandcode", "mcp.json"), "project-memory"), "");
   ok("gemini mcp", jsonHas(join(homedir(), ".gemini", "config", "mcp_config.json"), "project-memory"), "");
   ok("grok hooks", existsSync(join(homedir(), ".grok", "hooks", "project-memory.json")), "");
@@ -264,7 +265,26 @@ function installKiro(): string {
     )}\n`,
     "utf8",
   );
-  return "kiro: mcp.json + hooks/project-memory.json";
+  patchKiroEngineerHooks();
+  return "kiro: mcp.json + hooks/project-memory.json + engineer.md agentSpawn/stop";
+}
+
+function patchKiroEngineerHooks(): void {
+  const file = join(homedir(), ".kiro", "agents", "engineer.md");
+  if (!existsSync(file)) return;
+  const raw = readFileSync(file, "utf8");
+  const match = raw.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/);
+  if (!match) return;
+  let front = match[1];
+  const spawnCmd = JSON.stringify(`node "${CLI}" hook --event agentSpawn`);
+  const stopCmd = JSON.stringify(`node "${CLI}" hook --event stop`);
+  const hookYaml = `hooks:\n  agentSpawn:\n    - command: ${spawnCmd}\n  stop:\n    - command: ${stopCmd}`;
+  if (/^hooks:/m.test(front)) {
+    front = front.replace(/^hooks:[\s\S]*/m, hookYaml);
+  } else {
+    front = `${front.trimEnd()}\n${hookYaml}`;
+  }
+  writeFileSync(file, `---\n${front}\n---\n${match[2]}`, "utf8");
 }
 
 function installCommandCode(): string {
@@ -292,18 +312,21 @@ function installGemini(): string {
     Object.assign(hooks, claudeStyleHooks("startup|resume|clear|compact"));
     config.hooks = hooks;
   });
-  const agHooks = join(gemini, "config", "hooks.json");
-  mergeJson(agHooks, (config) => {
-    const hooks = asObject(config.hooks);
-    hooks.SessionStart = upsertHookGroup(hooks.SessionStart, {
-      matcher: "startup|resume|clear|compact",
-      hooks: [hookCommand()],
-    });
-    hooks.PreInvocation = upsertHookGroup(hooks.PreInvocation, { hooks: [hookCommand()] });
-    hooks.SessionEnd = upsertHookGroup(hooks.SessionEnd, { hooks: [hookCommand()] });
-    config.hooks = hooks;
-  });
-  return "gemini/antigravity: mcp_config.json + settings/hooks";
+  writeFileSync(
+    join(gemini, "config", "hooks.json"),
+    `${JSON.stringify(
+      {
+        "project-memory": {
+          PreInvocation: [{ type: "command", command: `node "${CLI}" hook`, timeout: 5 }],
+          Stop: [{ type: "command", command: `node "${CLI}" hook`, timeout: 5 }],
+        },
+      },
+      null,
+      2,
+    )}\n`,
+    "utf8",
+  );
+  return "gemini/antigravity: mcp_config.json + PreInvocation/Stop hooks";
 }
 
 function installGrok(): string {

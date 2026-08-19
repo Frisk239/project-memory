@@ -20,17 +20,19 @@ test("SessionStart injects index", () => {
   writeEntry({ name: "no-sed", description: "Do not sed batch edits", type: "feedback", body: "use Read+Edit" });
   const out = handleHook({ hook_event_name: "SessionStart", cwd: dir });
   assert.ok(out);
-  assert.equal(out.hookSpecificOutput.hookEventName, "SessionStart");
-  assert.match(out.hookSpecificOutput.additionalContext, /no-sed/);
-  assert.match(out.hookSpecificOutput.additionalContext, /Project memory/);
+  const payload = out as { hookSpecificOutput: { hookEventName: string; additionalContext: string } };
+  assert.equal(payload.hookSpecificOutput.hookEventName, "SessionStart");
+  assert.match(payload.hookSpecificOutput.additionalContext, /no-sed/);
+  assert.match(payload.hookSpecificOutput.additionalContext, /Project memory/);
 });
 
 test("Stop injects write reminder only", () => {
   const out = handleHook({ hook_event_name: "Stop" });
   assert.ok(out);
-  assert.match(out.hookSpecificOutput.additionalContext, /memory_write/);
-  assert.match(out.hookSpecificOutput.additionalContext, /do nothing/i);
-  assert.doesNotMatch(out.hookSpecificOutput.additionalContext, /MEMORY\.md/);
+  const text = (out as { hookSpecificOutput: { additionalContext: string } }).hookSpecificOutput.additionalContext;
+  assert.match(text, /memory_write/);
+  assert.match(text, /do nothing/i);
+  assert.doesNotMatch(text, /MEMORY\.md/);
 });
 
 test("only SessionStart reads and Stop writes", () => {
@@ -43,8 +45,22 @@ test("only SessionStart reads and Stop writes", () => {
 test("agentSpawn aliases SessionStart and SessionEnd aliases Stop", () => {
   const start = handleHook({ hook_event_name: "agentSpawn" });
   assert.ok(start);
-  assert.match(start.hookSpecificOutput.additionalContext, /Project memory/);
+  assert.match(String((start as { hookSpecificOutput: { additionalContext: string } }).hookSpecificOutput.additionalContext), /Project memory/);
   const end = handleHook({ hook_event_name: "SessionEnd" });
   assert.ok(end);
-  assert.match(end.hookSpecificOutput.additionalContext, /do nothing/i);
+  assert.match(String((end as { hookSpecificOutput: { additionalContext: string } }).hookSpecificOutput.additionalContext), /do nothing/i);
+});
+
+test("Antigravity PreInvocation injects ephemeralMessage once", () => {
+  const dir = mkdtempSync(join(tmpdir(), "pmem-ag-"));
+  dirs.push(dir);
+  process.env.PROJECT_MEMORY_DIR = dir;
+  writeEntry({ name: "ag-topic", description: "AG inject works", type: "project", body: "x" });
+  const id = `ag-${Date.now()}`;
+  const first = handleHook({ invocationNum: 0, conversationId: id, workspacePaths: [dir] });
+  assert.ok(first);
+  const steps = (first as { injectSteps: { ephemeralMessage: string }[] }).injectSteps;
+  assert.match(steps[0].ephemeralMessage, /ag-topic/);
+  const second = handleHook({ invocationNum: 1, conversationId: id, workspacePaths: [dir] });
+  assert.deepEqual(second, {});
 });
