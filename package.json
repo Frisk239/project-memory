@@ -20,7 +20,7 @@
   "scripts": {
     "build": "tsc",
     "prepare": "tsc",
-    "test": "tsc && node --test dist/store.test.js dist/hooks.test.js",
+    "test": "tsc && node --test dist/store.test.js dist/hooks.test.js dist/mcp-write.test.js",
     "start": "node dist/cli.js",
     "install-agents": "node dist/cli.js install"
   },

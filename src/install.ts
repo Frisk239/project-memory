@@ -115,6 +115,16 @@ function installZcode(): string {
         },
       ],
     });
+    const compactHook = {
+      type: "process",
+      command: "node",
+      args: [CLI, "hook"],
+      enabled: true,
+      timeoutMs: 5000,
+      statusMessage: MARKER,
+    };
+    events.PreCompact = upsertHookGroup(events.PreCompact, { hooks: [compactHook] });
+    events.PostCompact = upsertHookGroup(events.PostCompact, { hooks: [compactHook] });
     hooks.events = events;
     config.hooks = hooks;
     const mcp = asObject(config.mcp);
@@ -128,7 +138,7 @@ function installZcode(): string {
     mcp.servers = servers;
     config.mcp = mcp;
   });
-  return `zcode: user hooks SessionStart/Stop + mcp`;
+  return `zcode: user hooks SessionStart/Stop/PreCompact + mcp`;
 }
 
 function installCodex(): string {
@@ -156,6 +166,32 @@ function installCodex(): string {
           commandWindows: `node "${CLI}" hook`,
           statusMessage: "Project memory write reminder",
           timeout: 5,
+        },
+      ],
+    });
+    hooks.PreCompact = upsertHookGroup(hooks.PreCompact, {
+      matcher: "manual|auto",
+      hooks: [
+        {
+          type: "command",
+          command: `node "${CLI}" hook`,
+          commandWindows: `node "${CLI}" hook`,
+          statusMessage: "Flush project memory before compact",
+          timeout: 5,
+          additionalContextLimit: 2500,
+        },
+      ],
+    });
+    hooks.PostCompact = upsertHookGroup(hooks.PostCompact, {
+      matcher: "manual|auto",
+      hooks: [
+        {
+          type: "command",
+          command: `node "${CLI}" hook`,
+          commandWindows: `node "${CLI}" hook`,
+          statusMessage: "Reload project memory after compact",
+          timeout: 5,
+          additionalContextLimit: 2500,
         },
       ],
     });
@@ -210,6 +246,8 @@ function claudeStyleHooks(startMatcher: string): Record<string, unknown> {
         hooks: [hookCommand()],
       },
     ],
+    PreCompact: [{ hooks: [hookCommand()] }],
+    PostCompact: [{ hooks: [hookCommand()] }],
     Stop: [
       {
         hooks: [hookCommand()],
@@ -235,6 +273,8 @@ function installClaude(): string {
         hooks: [hookCommand()],
       }),
       Stop: upsertHookGroup(hooks.Stop, { hooks: [hookCommand()] }),
+      PreCompact: upsertHookGroup(hooks.PreCompact, { hooks: [hookCommand()] }),
+      PostCompact: upsertHookGroup(hooks.PostCompact, { hooks: [hookCommand()] }),
     });
     config.hooks = hooks;
   });
@@ -255,9 +295,11 @@ function installKiro(): string {
     join(hookDir, "project-memory.json"),
     `${JSON.stringify(
       {
+        version: "v1",
         hooks: [
-          { name: MARKER, trigger: "SessionStart", action: { type: "command", command: `node "${CLI}" hook` } },
-          { name: `${MARKER}-stop`, trigger: "Stop", action: { type: "command", command: `node "${CLI}" hook` } },
+          { name: MARKER, trigger: "SessionStart", action: { type: "command", command: `node "${CLI}" hook --event SessionStart --plain` } },
+          { name: `${MARKER}-prompt`, trigger: "UserPromptSubmit", action: { type: "command", command: `node "${CLI}" hook --event UserPromptSubmit --plain` } },
+          { name: `${MARKER}-stop`, trigger: "Stop", action: { type: "command", command: `node "${CLI}" hook --event Stop --plain` } },
         ],
       },
       null,
@@ -266,7 +308,7 @@ function installKiro(): string {
     "utf8",
   );
   patchKiroEngineerHooks();
-  return "kiro: mcp.json + hooks/project-memory.json + engineer.md agentSpawn/stop";
+  return "kiro: mcp.json + hooks + engineer.md agentSpawn/userPromptSubmit/stop";
 }
 
 function patchKiroEngineerHooks(): void {
@@ -276,9 +318,10 @@ function patchKiroEngineerHooks(): void {
   const match = raw.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/);
   if (!match) return;
   let front = match[1];
-  const spawnCmd = JSON.stringify(`node "${CLI}" hook --event agentSpawn`);
-  const stopCmd = JSON.stringify(`node "${CLI}" hook --event stop`);
-  const hookYaml = `hooks:\n  agentSpawn:\n    - command: ${spawnCmd}\n  stop:\n    - command: ${stopCmd}`;
+  const spawnCmd = JSON.stringify(`node "${CLI}" hook --event agentSpawn --plain`);
+  const promptCmd = JSON.stringify(`node "${CLI}" hook --event userPromptSubmit --plain`);
+  const stopCmd = JSON.stringify(`node "${CLI}" hook --event stop --plain`);
+  const hookYaml = `hooks:\n  agentSpawn:\n    - command: ${spawnCmd}\n  userPromptSubmit:\n    - command: ${promptCmd}\n  stop:\n    - command: ${stopCmd}`;
   if (/^hooks:/m.test(front)) {
     front = front.replace(/^hooks:[\s\S]*/m, hookYaml);
   } else {
@@ -298,9 +341,11 @@ function installCommandCode(): string {
       hooks: [hookCommand()],
     });
     hooks.Stop = upsertHookGroup(hooks.Stop, { hooks: [hookCommand()] });
+    hooks.PreCompact = upsertHookGroup(hooks.PreCompact, { hooks: [hookCommand()] });
+    hooks.PostCompact = upsertHookGroup(hooks.PostCompact, { hooks: [hookCommand()] });
     config.hooks = hooks;
   });
-  return "commandcode: mcp.json + settings.json SessionStart/Stop";
+  return "commandcode: mcp.json + settings.json SessionStart/Stop/PreCompact";
 }
 
 function installGemini(): string {
@@ -310,6 +355,7 @@ function installGemini(): string {
   mergeJson(join(gemini, "settings.json"), (config) => {
     const hooks = asObject(config.hooks);
     Object.assign(hooks, claudeStyleHooks("startup|resume|clear|compact"));
+    hooks.PreCompress = upsertHookGroup(hooks.PreCompress, { hooks: [hookCommand()] });
     config.hooks = hooks;
   });
   writeFileSync(
@@ -391,8 +437,15 @@ export const ProjectMemory = async ({ directory, worktree }) => {
     },
     "experimental.session.compacting": async (input, output) => {
       const id = input?.sessionID || "default";
+      const flush = spawnSync("node", [CLI, "inject", "--flush", "--cwd", cwd], {
+        encoding: "utf8",
+        timeout: 4000,
+        windowsHide: true,
+      });
       const text = sessionContext(cwd);
       log("compact session=" + id);
+      const flushText = (flush.stdout || "").trim();
+      if (flushText) output.context.push(flushText);
       if (text) output.context.push(text);
     },
     event: async ({ event }) => {

@@ -13,6 +13,7 @@ Write when the next session would otherwise redo the work. Empty `.memory` is no
 | finished a decision, constraint, or shipped status | new file, or update that slug |
 | research / 调研 / exploration with findings that would be costly to redo | allowed to write a new `project` or `reference` file |
 | remember / 记住 | write immediately |
+| about to compact / just compacted | write durable findings first, then re-read the index |
 | 不对 / 其实是 / 忘掉 / 作废 | correct (below) |
 
 Do not wait until a fact is "stable across many sessions". Multi-source research and non-obvious task context are worth keeping now.
@@ -49,3 +50,5 @@ Body: the fact, **Why**, **How to apply**.
 ## Tools
 
 `memory_index` · `memory_read` · `memory_search` · `memory_write` · `memory_forget`
+
+`memory_write` args: `name` (slug), `description` (one-line summary; `title` also ok), `type` (`user` | `feedback` | `project` | `reference`), `body` (full text; `content` also ok). Confirm the returned index line. `memory_read` a topic slug from the index — not `MEMORY.md`.

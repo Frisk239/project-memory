@@ -2,8 +2,8 @@
 import { readFileSync } from "node:fs";
 import { forgetEntry, listIndex, readEntry, readIndexText, searchEntries, writeEntry } from "./core/store.js";
 import { isMemoryType, type MemoryType } from "./core/types.js";
-import { sessionContext } from "./hooks/context.js";
-import { handleHook, type HookInput } from "./hooks/protocol.js";
+import { compactFlush, sessionContext } from "./hooks/context.js";
+import { handleHook, hookPlainText, type HookInput } from "./hooks/protocol.js";
 import { doctorAgents, installAgents } from "./install.js";
 
 const args = process.argv.slice(2);
@@ -23,6 +23,7 @@ async function dispatch(cmd: string, rest: string[]): Promise<void> {
     case "hook":
       return runHook(rest);
     case "inject":
+      if (rest.includes("--flush")) return print(compactFlush());
       return print(sessionContext(cwd));
     case "index":
       return print(readIndexText(cwd) || "(empty)");
@@ -98,6 +99,11 @@ function runHook(rest: string[]): void {
   const input = (raw ? JSON.parse(raw) : {}) as HookInput;
   if (event) input.hook_event_name = event;
   const output = handleHook(input);
+  if (rest.includes("--plain")) {
+    const text = hookPlainText(output);
+    if (text) process.stdout.write(`${text}\n`);
+    return;
+  }
   process.stdout.write(`${JSON.stringify(output ?? {})}\n`);
 }
 
