@@ -14,6 +14,7 @@ Write when the next session would otherwise redo the work. Empty `.memory` is no
 | research / 调研 / exploration with findings that would be costly to redo | allowed to write a new `project` or `reference` file |
 | remember / 记住 | write immediately |
 | about to compact / just compacted | write durable findings first, then re-read the index |
+| dream / consolidate / 整理记忆 / `/memory-dream` | `memory_dream` dry-run, then apply safe ops; LLM-merge only when two files agree |
 | 不对 / 其实是 / 忘掉 / 作废 | correct (below) |
 
 Do not wait until a fact is "stable across many sessions". Multi-source research and non-obvious task context are worth keeping now.
@@ -47,8 +48,18 @@ Body: the fact, **Why**, **How to apply**.
 
 `memory_index` at session start / after compact. `memory_read` a topic before acting on it. Empty index: do not invent memories; write the first one when something durable appears.
 
+## Dream
+
+Like Claude Code Auto-Dream and Mem0 `/mem0-dream`: housekeeping is deterministic; semantic merges need you.
+
+1. `memory_dream` with `dryRun: true` (CLI: `project-memory dream --dry-run`).
+2. Apply safe ops with `dryRun: false` (rebuild index, drop empty, merge **identical** bodies).
+3. For proposed similar/conflict pairs: `memory_read` both. Merge only if they agree. Never invent. If they disagree, tell the user.
+
+OpenCode: `/memory-dream`.
+
 ## Tools
 
-`memory_index` · `memory_read` · `memory_search` · `memory_write` · `memory_forget`
+`memory_index` · `memory_read` · `memory_search` · `memory_write` · `memory_forget` · `memory_dream`
 
 `memory_write` args: `name` (slug), `description` (one-line summary; `title` also ok), `type` (`user` | `feedback` | `project` | `reference`), `body` (full text; `content` also ok). Confirm the returned index line. `memory_read` a topic slug from the index — not `MEMORY.md`.

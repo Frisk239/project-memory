@@ -1,6 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
+import { applyDream, formatDreamReport } from "./core/dream.js";
 import { forgetEntry, listIndex, readEntry, readIndexText, searchEntries, writeEntry } from "./core/store.js";
 import { MEMORY_TYPES } from "./core/types.js";
 import { normalizeWriteInput } from "./mcp-write.js";
@@ -70,6 +71,28 @@ export async function startMcp(): Promise<void> {
     const items = listIndex();
     return { content: [{ type: "text" as const, text: JSON.stringify(items, null, 2) }] };
   });
+
+  server.tool(
+    "memory_dream",
+    "Consolidate .memory files: rebuild index, drop empty topics, merge identical bodies. Similar/conflict pairs are proposed only — never invented. dryRun defaults true.",
+    {
+      dryRun: z
+        .boolean()
+        .optional()
+        .describe("If true (default), report only. If false, apply safe ops (index rebuild, empty delete, identical-body merge)."),
+    },
+    async ({ dryRun }) => {
+      const report = applyDream({ dryRun: dryRun !== false });
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: `${formatDreamReport(report)}\n\n${JSON.stringify(report, null, 2)}`,
+          },
+        ],
+      };
+    },
+  );
 
   const transport = new StdioServerTransport();
   await server.connect(transport);

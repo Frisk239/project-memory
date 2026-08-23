@@ -30,7 +30,8 @@ Default agents: `opencode`, `zcode`, `codex`, `claude`, `kiro`, `commandcode`, `
 |---|---|
 | OpenCode | Restart. Index is injected into the system prompt (not the chat UI). |
 | ZCode | New session. Settings → Hooks should show `project-memory`. |
-| Codex / Grok | `/hooks` and trust the new commands. |
+| Codex | `/hooks` and trust the new commands. |
+| Grok | `/hooks` and trust the new commands. Grok does **not** use a Stop write-reminder: its Stop `additionalContext` continues the turn. |
 | Claude | New session. `/hooks` if you want to confirm. |
 | Kiro | New session. Enable MCP if prompted. |
 | Command Code | New session. |
@@ -45,10 +46,11 @@ node dist/cli.js install --agents opencode
 ## What gets installed
 
 - **MCP** `project-memory`: `memory_index` / `memory_read` / `memory_search` / `memory_write` / `memory_forget` / `memory_list`
-- **Hooks** (same semantics on every host):
+- **Hooks** (same semantics on every host, different Stop wiring):
   - **Read** at session start / resume / clear / compact (OpenCode: every model call, so the index stays in the rebuilt system prompt)
-  - **Write** only when durable — not every turn. Stop/idle says: if nothing durable, do nothing.
-- **Skill** `project-memory`: when to read / write / what not to store
+  - **Write** only when durable — not every turn. Claude/Codex/ZCode Stop and OpenCode idle say: if nothing durable, do nothing. Grok omits Stop so the reminder cannot loop.
+- **Skill** `project-memory`: when to read / write / dream / what not to store
+- **OpenCode** `/memory-dream`: consolidate `.memory/` (safe ops in CLI; semantic merge in-session)
 
 ## Usage
 
@@ -74,7 +76,13 @@ npx project-memory write --name slug --type project --description "one line" --b
 npx project-memory read slug
 npx project-memory search keyword
 npx project-memory forget slug
+npx project-memory dream --dry-run
+npx project-memory dream
 ```
+
+`dream` rebuilds `MEMORY.md` from topic files, deletes empty entries, and merges **identical** bodies. Similar or conflicting topics are reported, not auto-merged (OpenCode `/memory-dream` does the LLM pass).
+
+OpenCode: after `install --agents opencode`, run `/memory-dream` in the TUI.
 
 ## Uninstall (manual)
 

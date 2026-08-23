@@ -1,15 +1,21 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, test } from "node:test";
+import { fileURLToPath } from "node:url";
 import { writeEntry } from "./core/store.js";
 import { handleHook } from "./hooks/protocol.js";
+
+const cli = fileURLToPath(new URL("./cli.js", import.meta.url));
 
 const dirs: string[] = [];
 
 afterEach(() => {
   delete process.env.PROJECT_MEMORY_DIR;
+  delete process.env.GROK_HOOK_EVENT;
+  delete process.env.GROK_WORKSPACE_ROOT;
   for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
@@ -73,6 +79,62 @@ test("agentSpawn aliases SessionStart and SessionEnd aliases Stop", () => {
   const end = handleHook({ hook_event_name: "SessionEnd" });
   assert.ok(end);
   assert.match(String((end as { hookSpecificOutput: { additionalContext: string } }).hookSpecificOutput.additionalContext), /do nothing/i);
+});
+
+test("Grok Stop is silent so additionalContext cannot continue the turn", () => {
+  assert.equal(handleHook({ hook_event_name: "Stop" }, { flavor: "grok" }), null);
+  const out = execFileSync(process.execPath, [cli, "hook"], {
+    input: JSON.stringify({ hookEventName: "stop", reason: "end_turn" }),
+    encoding: "utf8",
+    env: { ...process.env, GROK_HOOK_EVENT: "stop" },
+    windowsHide: true,
+  });
+  assert.equal(out, "");
+});
+
+test("Grok session_start still injects the index", () => {
+  const dir = mkdtempSync(join(tmpdir(), "pmem-grok-"));
+  dirs.push(dir);
+  process.env.PROJECT_MEMORY_DIR = dir;
+  writeEntry({ name: "grok-topic", description: "Grok inject works", type: "project", body: "x" });
+  const out = handleHook(
+    { hookEventName: "session_start", workspaceRoot: dir },
+    { flavor: "grok" },
+  );
+  assert.ok(out);
+  const text = (out as { hookSpecificOutput: { additionalContext: string; hookEventName: string } }).hookSpecificOutput;
+  assert.equal(text.hookEventName, "SessionStart");
+  assert.match(text.additionalContext, /grok-topic/);
+  assert.match(text.additionalContext, /Project memory/);
+});
+
+test("Grok pre_compact and post_compact use canonical events", () => {
+  const dir = mkdtempSync(join(tmpdir(), "pmem-grok-c-"));
+  dirs.push(dir);
+  process.env.PROJECT_MEMORY_DIR = dir;
+  writeEntry({ name: "keep-grok", description: "keep", type: "project", body: "x" });
+  const pre = handleHook({ hookEventName: "pre_compact" }, { flavor: "grok" });
+  assert.match(JSON.stringify(pre), /compacted/i);
+  assert.doesNotMatch(JSON.stringify(pre), /keep-grok/);
+  const post = handleHook({ hookEventName: "post_compact", workspaceRoot: dir }, { flavor: "grok" });
+  assert.match(JSON.stringify(post), /keep-grok/);
+  assert.match(JSON.stringify(post), /just compacted/i);
+});
+
+test("Claude Stop still injects the write reminder", () => {
+  const out = handleHook({ hook_event_name: "Stop" }, { flavor: "claude" });
+  assert.ok(out);
+  const text = (out as { hookSpecificOutput: { additionalContext: string } }).hookSpecificOutput.additionalContext;
+  assert.match(text, /memory_write/);
+});
+
+test("workspaceRoot is used when cwd is missing", () => {
+  const dir = mkdtempSync(join(tmpdir(), "pmem-ws-"));
+  dirs.push(dir);
+  process.env.PROJECT_MEMORY_DIR = dir;
+  writeEntry({ name: "via-root", description: "from workspaceRoot", type: "project", body: "x" });
+  const out = handleHook({ hook_event_name: "SessionStart", workspaceRoot: dir });
+  assert.match(JSON.stringify(out), /via-root/);
 });
 
 test("Antigravity PreInvocation injects ephemeralMessage each call", () => {

@@ -130,3 +130,21 @@ export function listEntryFiles(cwd?: string): string[] {
   if (!existsSync(dir)) return [];
   return readdirSync(dir).filter((file) => file.endsWith(".md") && file !== "MEMORY.md");
 }
+
+export function listEntries(cwd?: string): MemoryEntry[] {
+  const entries: MemoryEntry[] = [];
+  for (const file of listEntryFiles(cwd)) {
+    const entry = readEntry(basename(file, ".md"), cwd);
+    if (entry) entries.push(entry);
+  }
+  return entries;
+}
+
+/** Rebuild MEMORY.md from topic files on disk. Drops stale index rows and adds orphans. */
+export function rebuildIndex(cwd?: string): MemoryIndexItem[] {
+  const items = listEntries(cwd).map((entry) => ({ name: entry.name, description: entry.description }));
+  writeIndex(items, cwd);
+  return items;
+}
+
+export { INDEX_LINE_LIMIT, INDEX_BYTE_LIMIT };

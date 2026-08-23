@@ -220,13 +220,26 @@ function installSkill(): string {
     join(homedir(), ".kiro", "skills", "project-memory", "SKILL.md"),
     join(homedir(), ".commandcode", "skills", "project-memory", "SKILL.md"),
     join(homedir(), ".gemini", "skills", "project-memory", "SKILL.md"),
-    join(homedir(), ".grok", "skills", "project-memory", "SKILL.md"),
   ];
   for (const target of targets) {
     mkdirSync(dirname(target), { recursive: true });
     copyFileSync(skillSrc, target);
   }
-  return `skill: copied to known skill dirs`;
+  installOpenCodeDreamCommand();
+  return `skill: copied to known skill dirs (grok skipped)`;
+}
+
+function installOpenCodeDreamCommand(): void {
+  const src = join(ROOT, "adapters", "opencode", "commands", "memory-dream.md");
+  if (!existsSync(src)) return;
+  const dirs = [join(homedir(), ".config", "opencode", "commands")];
+  if (process.platform === "win32" && process.env.APPDATA) {
+    dirs.push(join(process.env.APPDATA, "opencode", "commands"));
+  }
+  for (const dir of dirs) {
+    mkdirSync(dir, { recursive: true });
+    copyFileSync(src, join(dir, "memory-dream.md"));
+  }
 }
 
 function hookCommand(): Record<string, unknown> {
@@ -375,6 +388,31 @@ function installGemini(): string {
   return "gemini/antigravity: mcp_config.json + PreInvocation/Stop hooks";
 }
 
+function grokHookCommand(event: string): Record<string, unknown> {
+  return {
+    type: "command",
+    command: `node "${CLI}" hook --flavor grok --event ${event}`,
+    timeout: 5,
+    statusMessage: MARKER,
+  };
+}
+
+function grokStyleHooks(): Record<string, unknown> {
+  // Grok's Stop additionalContext keeps the agent working (up to 8
+  // continuations). Memory writes are skill-driven plus SessionStart /
+  // PreCompact context, matching OpenCode's observe-only idle path.
+  return {
+    SessionStart: [
+      {
+        matcher: "startup|resume|clear|compact",
+        hooks: [grokHookCommand("SessionStart")],
+      },
+    ],
+    PreCompact: [{ hooks: [grokHookCommand("PreCompact")] }],
+    PostCompact: [{ hooks: [grokHookCommand("PostCompact")] }],
+  };
+}
+
 function installGrok(): string {
   const grok = join(homedir(), ".grok");
   if (!existsSync(grok)) return "grok: ~/.grok missing, skipped";
@@ -382,7 +420,7 @@ function installGrok(): string {
   mkdirSync(hookDir, { recursive: true });
   writeFileSync(
     join(hookDir, "project-memory.json"),
-    `${JSON.stringify({ hooks: claudeStyleHooks("startup|resume|clear|compact") }, null, 2)}\n`,
+    `${JSON.stringify({ hooks: grokStyleHooks() }, null, 2)}\n`,
     "utf8",
   );
   const tomlPath = join(grok, "config.toml");
@@ -393,7 +431,7 @@ function installGrok(): string {
       writeFileSync(tomlPath, raw.endsWith("\n") ? raw + block : `${raw}\n${block}`, "utf8");
     }
   }
-  return "grok: hooks/project-memory.json + config.toml mcp";
+  return "grok: hooks/project-memory.json (SessionStart/PreCompact/PostCompact, no Stop) + config.toml mcp";
 }
 
 function pathToFileUrl(file: string): string {

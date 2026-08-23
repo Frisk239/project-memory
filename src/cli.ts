@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { readFileSync } from "node:fs";
+import { applyDream, formatDreamReport } from "./core/dream.js";
 import { forgetEntry, listIndex, readEntry, readIndexText, searchEntries, writeEntry } from "./core/store.js";
 import { isMemoryType, type MemoryType } from "./core/types.js";
 import { compactFlush, sessionContext } from "./hooks/context.js";
@@ -61,6 +62,11 @@ async function dispatch(cmd: string, rest: string[]): Promise<void> {
     case "list":
       print(listIndex(cwd).map((item) => `${item.name}\t${item.description}`).join("\n") || "(empty)");
       return;
+    case "dream": {
+      const dryRun = rest.includes("--dry-run");
+      print(formatDreamReport(applyDream({ cwd, dryRun })));
+      return;
+    }
     case "install":
       print(
         installAgents({
@@ -89,22 +95,26 @@ async function dispatch(cmd: string, rest: string[]): Promise<void> {
     }
     case "help":
     default:
-      print(`project-memory <hook|inject|index|read|write|search|forget|list|install|doctor|mcp>`);
+      print(`project-memory <hook|inject|index|read|write|search|forget|list|dream|install|doctor|mcp>`);
   }
 }
 
 function runHook(rest: string[]): void {
   const event = flag(rest, "--event");
+  const flavor = flag(rest, "--flavor");
   const raw = readFileSync(0, "utf8").trim();
   const input = (raw ? JSON.parse(raw) : {}) as HookInput;
   if (event) input.hook_event_name = event;
-  const output = handleHook(input);
+  const output = handleHook(input, flavor ? { flavor } : undefined);
   if (rest.includes("--plain")) {
     const text = hookPlainText(output);
     if (text) process.stdout.write(`${text}\n`);
     return;
   }
-  process.stdout.write(`${JSON.stringify(output ?? {})}\n`);
+  // Grok Stop is allow-by-silence: empty stdout ends the turn. `{}` is also
+  // treated as allow, but writing nothing matches the documented contract.
+  if (!output) return;
+  process.stdout.write(`${JSON.stringify(output)}\n`);
 }
 
 function flag(rest: string[], name: string): string | undefined {
