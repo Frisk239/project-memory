@@ -1,11 +1,12 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { writeEntry } from "./core/store.js";
+import { sessionContext } from "./hooks/context.js";
 import { handleHook } from "./hooks/protocol.js";
 
 const cli = fileURLToPath(new URL("./cli.js", import.meta.url));
@@ -135,6 +136,26 @@ test("workspaceRoot is used when cwd is missing", () => {
   writeEntry({ name: "via-root", description: "from workspaceRoot", type: "project", body: "x" });
   const out = handleHook({ hook_event_name: "SessionStart", workspaceRoot: dir });
   assert.match(JSON.stringify(out), /via-root/);
+});
+
+test("injected rules treat memories as snapshots and forbid secrets; index has no timestamps", () => {
+  const dir = mkdtempSync(join(tmpdir(), "pmem-adv-"));
+  dirs.push(dir);
+  process.env.PROJECT_MEMORY_DIR = dir;
+  writeEntry({ name: "no-sed", description: "Do not sed batch edits", type: "feedback", body: "use Read+Edit" });
+  const text = sessionContext(dir);
+  assert.match(text, /snapshots/i);
+  assert.match(text, /live repo/i);
+  assert.match(text, /current user instructions/i);
+  assert.match(text, /secret/i);
+  assert.doesNotMatch(text, /\bupdated:/i);
+  assert.doesNotMatch(text, /\d{4}-\d{2}-\d{2}T\d{2}:/);
+  assert.match(text, /no-sed/);
+  const skill = readFileSync(join(fileURLToPath(new URL(".", import.meta.url)), "..", "skills", "project-memory", "SKILL.md"), "utf8");
+  assert.match(skill, /snapshots/i);
+  assert.match(skill, /live repo/i);
+  assert.match(skill, /current user instructions/i);
+  assert.match(skill, /secret/i);
 });
 
 test("Antigravity PreInvocation injects ephemeralMessage each call", () => {

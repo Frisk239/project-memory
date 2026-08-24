@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, readdirSync, unlinkSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { entryPath, indexPath, memoryDir, slugify } from "./paths.js";
+import { isCloseTopic } from "./similarity.js";
 import { isMemoryType, type MemoryEntry, type MemoryIndexItem, type MemoryType } from "./types.js";
 
 const INDEX_LINE_LIMIT = 200;
@@ -34,14 +35,44 @@ export function readEntry(name: string, cwd?: string): MemoryEntry | null {
   return parseEntry(readFileSync(file, "utf8"), slugify(name));
 }
 
+export class SimilarTopicError extends Error {
+  readonly candidates: MemoryIndexItem[];
+
+  constructor(candidates: MemoryIndexItem[]) {
+    const names = candidates.map((item) => item.name).join(", ");
+    super(
+      `similar topic already exists: ${names}. write that slug to update, or pick a more distinct name.`,
+    );
+    this.name = "SimilarTopicError";
+    this.candidates = candidates;
+  }
+}
+
 export function writeEntry(entry: MemoryEntry, cwd?: string): MemoryEntry {
   const dir = memoryDir(cwd);
   mkdirSync(dir, { recursive: true });
   const name = slugify(entry.name);
-  const saved: MemoryEntry = { ...entry, name };
+  const previous = readEntry(name, cwd);
+  const saved: MemoryEntry = {
+    ...entry,
+    name,
+    pin: entry.pin ?? previous?.pin,
+  };
   writeFileSync(entryPath(name, cwd), renderEntry(saved), "utf8");
   upsertIndex(saved, cwd);
   return saved;
+}
+
+/** Create or update. New slugs that match an existing topic are refused. */
+export function saveEntry(entry: MemoryEntry, cwd?: string): MemoryEntry {
+  const name = slugify(entry.name);
+  if (!existsSync(entryPath(name, cwd))) {
+    const hits = listEntries(cwd).filter((existing) => isCloseTopic(entry, existing));
+    if (hits.length) {
+      throw new SimilarTopicError(hits.map((item) => ({ name: item.name, description: item.description })));
+    }
+  }
+  return writeEntry(entry, cwd);
 }
 
 export function forgetEntry(name: string, cwd?: string): boolean {
@@ -90,9 +121,10 @@ function capIndex(text: string): string {
 
 function renderEntry(entry: MemoryEntry): string {
   const origin = entry.origin ? `\n  origin: ${entry.origin}` : "";
+  const pin = entry.pin ? "\npin: true" : "";
   return `---
 name: ${entry.name}
-description: ${entry.description}
+description: ${entry.description}${pin}
 metadata:
   node_type: memory
   type: ${entry.type}${origin}
@@ -113,7 +145,9 @@ function parseEntry(raw: string, fallbackName: string): MemoryEntry {
   const typeRaw = pickField(front, "type") || "project";
   const type: MemoryType = isMemoryType(typeRaw) ? typeRaw : "project";
   const origin = pickField(front, "origin");
-  return { name, description, type, body: match[2].trim(), origin };
+  const pinRaw = pickField(front, "pin");
+  const pin = pinRaw === "true" || pinRaw === "yes";
+  return { name, description, type, body: match[2].trim(), origin, pin: pin || undefined };
 }
 
 function pickField(front: string, key: string): string | undefined {

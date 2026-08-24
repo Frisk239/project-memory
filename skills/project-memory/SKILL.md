@@ -5,6 +5,8 @@ description: Shared project memory. Use after finishing a non-trivial task, afte
 
 Write when the next session would otherwise redo the work. Empty `.memory` is normal. Do not spam. Existing files are not a cap. A new valuable topic **may** get a new file — not required for every new task. Same slug only for the same topic or a correction.
 
+Recalled facts are snapshots. The live repo and the current user instructions win if they disagree. Never store secrets, credentials, or tokens.
+
 ## When to write
 
 | trigger | action |
@@ -53,8 +55,8 @@ Body: the fact, **Why**, **How to apply**.
 Like Claude Code Auto-Dream and Mem0 `/mem0-dream`: housekeeping is deterministic; semantic merges need you.
 
 1. `memory_dream` with `dryRun: true` (CLI: `project-memory dream --dry-run`).
-2. Apply safe ops with `dryRun: false` (rebuild index, drop empty, merge **identical** bodies).
-3. For proposed similar/conflict pairs: `memory_read` both. Merge only if they agree. Never invent. If they disagree, tell the user.
+2. Apply safe ops with `dryRun: false` (rebuild index, drop empty, merge **identical** bodies). Pinned topics (`pin: true`) are never forgotten or merged away. A lock file blocks overlapping apply.
+3. For proposed similar/conflict/stale/relative-date pairs: `memory_read` both. Merge only if they agree. Convert relative dates to absolute dates. Never invent. If they disagree, tell the user. Do not auto-delete stale TODO/Next.
 
 OpenCode: `/memory-dream`.
 

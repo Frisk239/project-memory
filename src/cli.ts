@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { readFileSync } from "node:fs";
 import { applyDream, formatDreamReport } from "./core/dream.js";
-import { forgetEntry, listIndex, readEntry, readIndexText, searchEntries, writeEntry } from "./core/store.js";
+import { forgetEntry, listIndex, readEntry, readIndexText, saveEntry, searchEntries } from "./core/store.js";
 import { isMemoryType, type MemoryType } from "./core/types.js";
 import { compactFlush, sessionContext } from "./hooks/context.js";
 import { handleHook, hookPlainText, type HookInput } from "./hooks/protocol.js";
@@ -43,7 +43,17 @@ async function dispatch(cmd: string, rest: string[]): Promise<void> {
       const body = flag(rest, "--body") || rest.filter((arg) => !arg.startsWith("--")).slice(1).join(" ");
       if (!name || !body) throw new Error("usage: project-memory write --name <slug> --type <type> --description <text> --body <text>");
       if (!isMemoryType(type)) throw new Error(`invalid type: ${type}`);
-      const saved = writeEntry({ name, description: description || name, type, body, origin: flag(rest, "--origin") }, cwd);
+      const saved = saveEntry(
+        {
+          name,
+          description: description || name,
+          type,
+          body,
+          origin: flag(rest, "--origin"),
+          pin: rest.includes("--pin") ? true : undefined,
+        },
+        cwd,
+      );
       print(`wrote ${saved.name}`);
       return;
     }

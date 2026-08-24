@@ -7,6 +7,7 @@ export type WriteInput = {
   type?: string;
   body?: string;
   content?: string;
+  pin?: boolean;
 };
 
 export type WriteOk = { ok: true; entry: MemoryEntry };
@@ -28,7 +29,7 @@ export function normalizeWriteInput(input: WriteInput): WriteOk | WriteErr {
   if (!isMemoryType(typeRaw)) {
     return { ok: false, error: `invalid type: ${typeRaw}. use user | feedback | project | reference. received: ${receivedKeys(input)}.` };
   }
-  return { ok: true, entry: { name, description, type: typeRaw, body } };
+  return { ok: true, entry: { name, description, type: typeRaw, body, pin: input.pin } };
 }
 
 function receivedKeys(input: WriteInput): string {

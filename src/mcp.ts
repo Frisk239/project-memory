@@ -1,8 +1,8 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
-import { applyDream, formatDreamReport } from "./core/dream.js";
-import { forgetEntry, listIndex, readEntry, readIndexText, searchEntries, writeEntry } from "./core/store.js";
+import { applyDream, DreamLockError, formatDreamReport } from "./core/dream.js";
+import { forgetEntry, listIndex, readEntry, readIndexText, saveEntry, searchEntries, SimilarTopicError } from "./core/store.js";
 import { MEMORY_TYPES } from "./core/types.js";
 import { normalizeWriteInput } from "./mcp-write.js";
 
@@ -48,12 +48,20 @@ export async function startMcp(): Promise<void> {
       type: z.enum(MEMORY_TYPES).describe("user | feedback | project | reference"),
       body: z.string().optional().describe("Full text: fact, Why, How to apply. Alias: content"),
       content: z.string().optional().describe("Alias for body"),
+      pin: z.boolean().optional().describe("If true, dream will not forget or merge this topic away"),
     },
     async (args) => {
       const parsed = normalizeWriteInput(args);
       if (!parsed.ok) return { content: [{ type: "text" as const, text: parsed.error }], isError: true };
-      const saved = writeEntry({ ...parsed.entry, origin: "mcp" });
-      return { content: [{ type: "text" as const, text: `wrote ${saved.name}\n- ${saved.name} — ${saved.description}` }] };
+      try {
+        const saved = saveEntry({ ...parsed.entry, origin: "mcp" });
+        return { content: [{ type: "text" as const, text: `wrote ${saved.name}\n- ${saved.name} — ${saved.description}` }] };
+      } catch (error) {
+        if (error instanceof SimilarTopicError) {
+          return { content: [{ type: "text" as const, text: error.message }], isError: true };
+        }
+        throw error;
+      }
     },
   );
 
@@ -82,15 +90,22 @@ export async function startMcp(): Promise<void> {
         .describe("If true (default), report only. If false, apply safe ops (index rebuild, empty delete, identical-body merge)."),
     },
     async ({ dryRun }) => {
-      const report = applyDream({ dryRun: dryRun !== false });
-      return {
-        content: [
-          {
-            type: "text" as const,
-            text: `${formatDreamReport(report)}\n\n${JSON.stringify(report, null, 2)}`,
-          },
-        ],
-      };
+      try {
+        const report = applyDream({ dryRun: dryRun !== false });
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: `${formatDreamReport(report)}\n\n${JSON.stringify(report, null, 2)}`,
+            },
+          ],
+        };
+      } catch (error) {
+        if (error instanceof DreamLockError) {
+          return { content: [{ type: "text" as const, text: error.message }], isError: true };
+        }
+        throw error;
+      }
     },
   );
 

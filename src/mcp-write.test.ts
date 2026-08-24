@@ -30,6 +30,19 @@ test("canonical fields win over aliases", () => {
   assert.equal(parsed.entry.body, "body-text");
 });
 
+test("pin flows through normalizeWriteInput", () => {
+  const parsed = normalizeWriteInput({
+    name: "keep-pin",
+    description: "Pinned",
+    type: "project",
+    body: "use pnpm",
+    pin: true,
+  });
+  assert.equal(parsed.ok, true);
+  if (!parsed.ok) return;
+  assert.equal(parsed.entry.pin, true);
+});
+
 test("missing body lists received keys", () => {
   const parsed = normalizeWriteInput({ name: "x", title: "only title", type: "project" });
   assert.equal(parsed.ok, false);

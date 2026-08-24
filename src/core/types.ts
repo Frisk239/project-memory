@@ -8,6 +8,7 @@ export type MemoryEntry = {
   type: MemoryType;
   body: string;
   origin?: string;
+  pin?: boolean;
 };
 
 export type MemoryIndexItem = {

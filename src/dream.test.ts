@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, test } from "node:test";
-import { applyDream, planDream } from "./core/dream.js";
+import { applyDream, dreamLockPath, DreamLockError, planDream } from "./core/dream.js";
+import { entryPath } from "./core/paths.js";
 import { listIndex, readEntry, writeEntry } from "./core/store.js";
 
 const dirs: string[] = [];
@@ -61,4 +62,69 @@ test("dream proposes but does not auto-merge similar non-identical bodies", () =
   const report = applyDream({ dryRun: false });
   assert.equal(listIndex().length, 2, "similar files stay until an LLM merge");
   assert.ok(report.proposed.some((op) => op.op === "merge" && !op.safe));
+});
+
+test("dream apply keeps a pinned topic that would otherwise be forgotten or merged", () => {
+  isolated();
+  writeEntry({
+    name: "keep-pin",
+    description: "Pinned",
+    type: "project",
+    body: "canonical long enough body here",
+    pin: true,
+  });
+  writeEntry({ name: "dup", description: "Dup", type: "project", body: "canonical long enough body here" });
+  writeEntry({ name: "pinned-tiny", description: "Tiny pin", type: "feedback", body: "x", pin: true });
+  writeEntry({ name: "tiny", description: "Tiny", type: "feedback", body: "x" });
+  const report = applyDream({ dryRun: false });
+  assert.ok(readEntry("keep-pin"));
+  assert.equal(readEntry("keep-pin")?.pin, true);
+  assert.equal(readEntry("dup"), null);
+  assert.ok(readEntry("pinned-tiny"));
+  assert.equal(readEntry("tiny"), null);
+  const names = listIndex().map((item) => item.name).sort();
+  assert.ok(names.includes("keep-pin"));
+  assert.ok(names.includes("pinned-tiny"));
+  assert.ok(report.applied.some((op) => op.op === "forget" && op.names.includes("tiny")));
+});
+
+test("dream apply fails while a lock is held and proceeds after the lock expires", () => {
+  isolated();
+  writeEntry({ name: "tiny", description: "Tiny", type: "feedback", body: "x" });
+  writeFileSync(dreamLockPath(), `${JSON.stringify({ pid: 1, at: new Date().toISOString() })}\n`);
+  assert.throws(() => applyDream({ dryRun: false }), DreamLockError);
+  assert.ok(readEntry("tiny"), "held lock must not apply forget");
+  writeFileSync(dreamLockPath(), `${JSON.stringify({ pid: 1, at: "2000-01-01T00:00:00.000Z" })}\n`);
+  const report = applyDream({ dryRun: false });
+  assert.equal(readEntry("tiny"), null);
+  assert.ok(report.applied.some((op) => op.op === "forget" && op.names.includes("tiny")));
+});
+
+test("dream proposes stale TODO/Next older than 14 days and does not delete it", () => {
+  isolated();
+  writeEntry({
+    name: "old-next",
+    description: "Leftover next steps",
+    type: "project",
+    body: "## Next\nShip the ledger after review of the parking-fee cut.\n\nWhy: leftover from last month.",
+  });
+  const past = new Date(Date.now() - 15 * 24 * 60 * 60 * 1000);
+  utimesSync(entryPath("old-next"), past, past);
+  const report = applyDream({ dryRun: false });
+  assert.ok(report.proposed.some((op) => op.op === "stale" && op.names.includes("old-next") && !op.safe));
+  assert.ok(readEntry("old-next"));
+  assert.ok(listIndex().some((item) => item.name === "old-next"));
+});
+
+test("dream proposes relative dates and does not auto-edit the body", () => {
+  isolated();
+  writeEntry({
+    name: "recent-call",
+    description: "Call outcome",
+    type: "project",
+    body: "We decided yesterday to keep markdown files in git so every agent can read the same notes.",
+  });
+  const report = applyDream({ dryRun: false });
+  assert.ok(report.proposed.some((op) => op.op === "relative-date" && op.names.includes("recent-call") && !op.safe));
+  assert.match(readEntry("recent-call")?.body ?? "", /yesterday/);
 });

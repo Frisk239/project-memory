@@ -1,13 +1,20 @@
+import { existsSync, mkdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { memoryDir } from "./paths.js";
+import { BODY_DIVERGE, BODY_SIMILAR, TITLE_OVERLAP, bodyScore, titleScore } from "./similarity.js";
 import { forgetEntry, listEntries, listIndex, rebuildIndex, writeEntry } from "./store.js";
 import type { MemoryEntry } from "./types.js";
 
 const EMPTY_BODY = 20;
-const SIMILAR = 0.82;
-const TITLE_OVERLAP = 0.55;
-const BODY_DIVERGE = 0.35;
+const STALE_MS = 14 * 24 * 60 * 60 * 1000;
+const LOCK_TTL_MS = 5 * 60 * 1000;
+const LOCK_NAME = ".dream.lock";
+const RELATIVE_DATE =
+  /\b(yesterday|today|tomorrow|last\s+(night|week|month|year)|(?:a|\d+)\s+days?\s+ago)\b/i;
+const TODO_OR_NEXT = /(?:^|\n)\s*(?:#{1,6}\s*)?(?:TODO|Next)\b/;
 
 export type DreamOp = {
-  op: "forget" | "merge" | "rebuild-index" | "conflict";
+  op: "forget" | "merge" | "rebuild-index" | "conflict" | "stale" | "relative-date";
   names: string[];
   keep?: string;
   reason: string;
@@ -21,6 +28,10 @@ export type DreamReport = {
   applied: DreamOp[];
   proposed: DreamOp[];
 };
+
+export function dreamLockPath(cwd?: string): string {
+  return join(memoryDir(cwd), LOCK_NAME);
+}
 
 export function planDream(cwd?: string): DreamOp[] {
   const entries = listEntries(cwd);
@@ -43,6 +54,7 @@ export function planDream(cwd?: string): DreamOp[] {
   const seenEmpty = new Set<string>();
   for (const entry of entries) {
     if (entry.body.trim().length < EMPTY_BODY) {
+      if (entry.pin) continue;
       seenEmpty.add(entry.name);
       ops.push({
         op: "forget",
@@ -64,10 +76,11 @@ export function planDream(cwd?: string): DreamOp[] {
   for (const group of byBody.values()) {
     if (group.length < 2) continue;
     const keep = pickKeep(group, index);
-    const drop = group.filter((entry) => entry.name !== keep).map((entry) => entry.name);
+    const drop = group.filter((entry) => entry.name !== keep && !entry.pin).map((entry) => entry.name);
+    if (!drop.length) continue;
     ops.push({
       op: "merge",
-      names: group.map((entry) => entry.name),
+      names: [keep, ...drop],
       keep,
       reason: `identical body; keep ${keep}, drop ${drop.join(", ")}`,
       safe: true,
@@ -79,24 +92,43 @@ export function planDream(cwd?: string): DreamOp[] {
     for (let j = i + 1; j < remaining.length; j += 1) {
       const a = remaining[i];
       const b = remaining[j];
-      const bodyScore = jaccard(tokens(a.body), tokens(b.body));
-      const titleScore = jaccard(tokens(`${a.name} ${a.description}`), tokens(`${b.name} ${b.description}`));
-      if (bodyScore >= SIMILAR) {
+      const bodies = bodyScore(a.body, b.body);
+      const titles = titleScore(a, b);
+      if (bodies >= BODY_SIMILAR) {
         ops.push({
           op: "merge",
           names: [a.name, b.name],
           keep: pickKeep([a, b], index),
-          reason: `similar bodies (${pct(bodyScore)}); needs a human/LLM merge of non-identical text`,
+          reason: `similar bodies (${pct(bodies)}); needs a human/LLM merge of non-identical text`,
           safe: false,
         });
-      } else if (titleScore >= TITLE_OVERLAP && bodyScore < BODY_DIVERGE && a.type === b.type) {
+      } else if (titles >= TITLE_OVERLAP && bodies < BODY_DIVERGE && a.type === b.type) {
         ops.push({
           op: "conflict",
           names: [a.name, b.name],
-          reason: `same topic-ish titles (${pct(titleScore)}) but different bodies (${pct(bodyScore)}); do not keep both if they disagree`,
+          reason: `same topic-ish titles (${pct(titles)}) but different bodies (${pct(bodies)}); do not keep both if they disagree`,
           safe: false,
         });
       }
+    }
+  }
+
+  for (const entry of entries) {
+    if (TODO_OR_NEXT.test(entry.body) && topicAgeMs(entry.name, cwd) >= STALE_MS) {
+      ops.push({
+        op: "stale",
+        names: [entry.name],
+        reason: "TODO/Next section older than 14 days; review or drop — not auto-deleted",
+        safe: false,
+      });
+    }
+    if (RELATIVE_DATE.test(entry.body)) {
+      ops.push({
+        op: "relative-date",
+        names: [entry.name],
+        reason: "relative date wording; convert to an absolute date — not auto-edited",
+        safe: false,
+      });
     }
   }
 
@@ -107,8 +139,6 @@ export function applyDream(opts: { cwd?: string; dryRun?: boolean } = {}): Dream
   const cwd = opts.cwd;
   const dryRun = Boolean(opts.dryRun);
   const planned = planDream(cwd);
-  const applied: DreamOp[] = [];
-  const proposed: DreamOp[] = [];
 
   if (dryRun) {
     return {
@@ -120,60 +150,117 @@ export function applyDream(opts: { cwd?: string; dryRun?: boolean } = {}): Dream
     };
   }
 
-  for (const op of planned) {
-    if (!op.safe) {
-      proposed.push(op);
-      continue;
-    }
-    if (op.op === "rebuild-index") {
-      rebuildIndex(cwd);
-      applied.push(op);
-      continue;
-    }
-    if (op.op === "forget") {
-      for (const name of op.names) forgetEntry(name, cwd);
-      applied.push(op);
-      continue;
-    }
-    if (op.op === "merge" && op.keep) {
-      const keep = listEntries(cwd).find((entry) => entry.name === op.keep);
-      if (keep) writeEntry(keep, cwd);
-      for (const name of op.names) {
-        if (name !== op.keep) forgetEntry(name, cwd);
-      }
-      applied.push(op);
-    }
-  }
+  const release = acquireDreamLock(cwd);
+  try {
+    const applied: DreamOp[] = [];
+    const proposed: DreamOp[] = [];
 
-  rebuildIndex(cwd);
-  return {
-    dryRun: false,
-    entryCount: listEntries(cwd).length,
-    indexCount: listIndex(cwd).length,
-    applied,
-    proposed,
+    for (const op of planned) {
+      if (!op.safe) {
+        proposed.push(op);
+        continue;
+      }
+      if (op.op === "rebuild-index") {
+        rebuildIndex(cwd);
+        applied.push(op);
+        continue;
+      }
+      if (op.op === "forget") {
+        const names = op.names.filter((name) => !isPinned(name, cwd));
+        if (!names.length) continue;
+        for (const name of names) forgetEntry(name, cwd);
+        applied.push({ ...op, names });
+        continue;
+      }
+      if (op.op === "merge" && op.keep) {
+        if (isPinned(op.keep, cwd) === false && op.names.some((name) => name !== op.keep && isPinned(name, cwd))) {
+          proposed.push({ ...op, safe: false, reason: `${op.reason}; pinned names were left untouched` });
+          continue;
+        }
+        const keep = listEntries(cwd).find((entry) => entry.name === op.keep);
+        if (keep) writeEntry(keep, cwd);
+        const dropped: string[] = [];
+        for (const name of op.names) {
+          if (name === op.keep) continue;
+          if (isPinned(name, cwd)) continue;
+          forgetEntry(name, cwd);
+          dropped.push(name);
+        }
+        if (dropped.length) applied.push({ ...op, names: [op.keep, ...dropped] });
+      }
+    }
+
+    rebuildIndex(cwd);
+    return {
+      dryRun: false,
+      entryCount: listEntries(cwd).length,
+      indexCount: listIndex(cwd).length,
+      applied,
+      proposed,
+    };
+  } finally {
+    release();
+  }
+}
+
+export class DreamLockError extends Error {
+  constructor(message = "dream already running (.memory/.dream.lock). retry after it finishes, or delete the lock if it is stuck.") {
+    super(message);
+    this.name = "DreamLockError";
+  }
+}
+
+function acquireDreamLock(cwd?: string): () => void {
+  const file = dreamLockPath(cwd);
+  if (existsSync(file) && !lockIsStale(file)) {
+    throw new DreamLockError();
+  }
+  mkdirSync(memoryDir(cwd), { recursive: true });
+  writeFileSync(file, `${JSON.stringify({ pid: process.pid, at: new Date().toISOString() })}\n`, "utf8");
+  return () => {
+    try {
+      unlinkSync(file);
+    } catch {
+      /* already gone */
+    }
   };
 }
 
+function lockIsStale(file: string): boolean {
+  try {
+    const raw = readFileSync(file, "utf8");
+    const parsed = JSON.parse(raw) as { at?: string };
+    const at = parsed.at ? Date.parse(parsed.at) : NaN;
+    if (!Number.isFinite(at)) return true;
+    return Date.now() - at > LOCK_TTL_MS;
+  } catch {
+    return true;
+  }
+}
+
+function isPinned(name: string, cwd?: string): boolean {
+  return Boolean(listEntries(cwd).find((entry) => entry.name === name)?.pin);
+}
+
+function topicAgeMs(name: string, cwd?: string): number {
+  try {
+    const file = join(memoryDir(cwd), `${name}.md`);
+    return Date.now() - statSync(file).mtimeMs;
+  } catch {
+    return 0;
+  }
+}
+
 function pickKeep(group: MemoryEntry[], index: { name: string }[]): string {
+  const pinned = group.filter((entry) => entry.pin);
+  const pool = pinned.length ? pinned : group;
   const order = new Map(index.map((item, i) => [item.name, i]));
   // Newest rows sit at the front of MEMORY.md. Keep the oldest duplicate.
-  return [...group].sort((a, b) => (order.get(b.name) ?? -1) - (order.get(a.name) ?? -1))[0].name;
+  return [...pool].sort((a, b) => (order.get(b.name) ?? -1) - (order.get(a.name) ?? -1))[0].name;
 }
 
 function exactDupDrop(ops: DreamOp[], name: string): boolean {
   return ops.some((op) => op.op === "merge" && op.safe && op.keep !== name && op.names.includes(name));
-}
-
-function tokens(text: string): Set<string> {
-  return new Set(text.toLowerCase().split(/[^a-z0-9]+/g).filter((part) => part.length > 2));
-}
-
-function jaccard(a: Set<string>, b: Set<string>): number {
-  if (a.size === 0 && b.size === 0) return 1;
-  let inter = 0;
-  for (const item of a) if (b.has(item)) inter += 1;
-  return inter / (a.size + b.size - inter);
 }
 
 function pct(score: number): string {
