@@ -83,7 +83,7 @@ function canonicalEvent(name: string): string {
   return EVENT_ALIASES[compact] || name;
 }
 
-function resolveCwd(input: HookInput): string | undefined {
+export function resolveCwd(input: HookInput): string | undefined {
   return input.cwd || input.workspaceRoot || process.env.GROK_WORKSPACE_ROOT || input.workspacePaths?.[0];
 }
 

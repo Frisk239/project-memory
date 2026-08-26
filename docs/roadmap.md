@@ -1,6 +1,8 @@
 # Improvement roadmap
 
-Project-scoped development ledger in git. OpenCode is the primary host.
+> **Superseded in part by ADR-0001–0005 and `docs/implementation-plan.md`.** The shipped shape is a project-local, **gitignored-by-default** ledger shared **by path**, with **organize at write** and **conflict = both stay, tell the owner**. Extract happens in-session after a round (no sidecar). The Phase 2/3 `/memory` `/remember` UI, search snippets, supersede/audit trail, and any auto-dream loop below are **not** this work — treat them as ideas, not commitments. Where this doc says "in git", read "shared by path, gitignored by default".
+
+Project-scoped development ledger, shared by path (gitignored by default). OpenCode and Kiro are the primary hosts.
 
 This is not a plan to give OpenCode Hermes-style auto-memory or self-evolving skills. Memory is a **project notebook** the next session (and other agents, and humans) can read. Empty `.memory/` is normal.
 
@@ -69,7 +71,7 @@ Phase 1 (ledger hygiene) is in the tree.
 
 | Surface | Today |
 |---|---|
-| Store | `.memory/MEMORY.md` + one markdown file per slug. `saveEntry` refuses a new slug close to an existing topic; same slug still overwrites. |
+| Store | `.memory/MEMORY.md` + one markdown file per slug, gitignored by default. `saveEntry` organizes at write: same slug upserts unless the body diverges, in which case it keeps both under a `*-conflict` sibling and flags both; a new slug close to an existing topic is refused. Conflict never picks a winner. |
 | MCP / CLI | `memory_index` / `read` / `search` / `write` / `forget` / `list` / `dream`. Write accepts `pin`. |
 | Dream | Rebuild index, drop empty, merge identical bodies. Similar/conflict/stale TODO/relative dates → `proposed`. Pin is never forgotten or merged away. Apply takes `.memory/.dream.lock`. |
 | OpenCode | Thin plugin injects index every model call; idle only logs; command `/memory-dream` |

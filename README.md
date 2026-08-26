@@ -2,13 +2,21 @@
 
 Project-scoped markdown memory shared across coding agents.
 
-What one agent writes, the others can read. Storage is plain files in the git repo:
+What one agent writes, the others can read. Storage is project-local plain files, **gitignored by default** — shared **by path**, not by git. Switch between hosts (Kiro, OpenCode, …) on the same machine and they see the same ledger because they resolve the same project root, not because it is committed.
 
 ```
-<git-root>/.memory/
+<project-root>/.memory/    # gitignored on first write
   MEMORY.md     # index — injected at session start
   *.md          # one durable fact per file
 ```
+
+On the first write into a git repo (and on install), `.memory/` is appended to that repo's `.gitignore`. Already-tracked files are left alone; untrack them yourself if you want them out.
+
+How it works:
+
+- **Extract after a round** — after a successful turn, the in-session agent writes durable facts itself; you do not have to say 记住. No sidecar model, no background job.
+- **Organize at write** — the same topic reuses the same slug (upsert). A new slug too close to an existing topic is refused so the agent retries the right slug.
+- **Conflict tells the owner** — when a new fact disagrees with an existing one, both entries stay and the agent tells you which two slugs disagree. It never picks a winner, merges, or deletes.
 
 Requires **Node 20+**.
 
@@ -33,7 +41,7 @@ Default agents: `opencode`, `zcode`, `codex`, `claude`, `kiro`, `commandcode`, `
 | Codex | `/hooks` and trust the new commands. |
 | Grok | `/hooks` and trust the new commands. Grok does **not** use a Stop write-reminder: its Stop `additionalContext` continues the turn. |
 | Claude | New session. `/hooks` if you want to confirm. |
-| Kiro | New session. Enable MCP if prompted. |
+| Kiro | New session. User hooks in `~/.kiro/hooks/project-memory.json`; CLI `engineer` agent gets `agentSpawn` / `stop`. Enable MCP if prompted. |
 | Command Code | New session. |
 | Gemini / Antigravity | New session. Antigravity uses `PreInvocation` once per session. |
 
@@ -48,9 +56,9 @@ node dist/cli.js install --agents opencode
 - **MCP** `project-memory`: `memory_index` / `memory_read` / `memory_search` / `memory_write` / `memory_forget` / `memory_list`
 - **Hooks** (same semantics on every host, different Stop wiring):
   - **Read** at session start / resume / clear / compact (OpenCode: every model call, so the index stays in the rebuilt system prompt)
-  - **Write** only when durable — not every turn. Claude/Codex/ZCode Stop and OpenCode idle say: if nothing durable, do nothing. Grok omits Stop so the reminder cannot loop.
-- **Skill** `project-memory`: when to read / write / dream / what not to store
-- **OpenCode** `/memory-dream`: consolidate `.memory/` (safe ops in CLI; semantic merge in-session)
+  - **Extract** after a successful round — durable facts only, organized at write. Claude/Codex/ZCode Stop and OpenCode idle say: if nothing durable, do nothing. OpenCode idle stays log-only. Grok omits Stop so the reminder cannot loop.
+- **Skill** `project-memory`: when to read / write / correct, how conflict is handled, what not to store
+- **`memory_dream`** stays as an optional CLI/MCP escape hatch (dry-run default) for manual housekeeping — not part of the normal loop
 
 ## Usage
 
@@ -80,9 +88,7 @@ npx project-memory dream --dry-run
 npx project-memory dream
 ```
 
-`dream` rebuilds `MEMORY.md` from topic files, deletes empty entries, and merges **identical** bodies. Similar or conflicting topics are reported, not auto-merged (OpenCode `/memory-dream` does the LLM pass).
-
-OpenCode: after `install --agents opencode`, run `/memory-dream` in the TUI.
+`dream` is an optional escape hatch: it rebuilds `MEMORY.md` from topic files, deletes empty entries, and merges **identical** bodies. Similar or conflicting topics are reported, never auto-merged. Organize already happens at write, so you rarely need this and nothing auto-invokes it.
 
 ## Uninstall (manual)
 

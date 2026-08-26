@@ -1,0 +1,3 @@
+# Organize at write; no Dream job
+
+ZCode has no separate consolidation query. After each successful turn a sidecar extract reads the index, upserts same-topic files, and rewrites `MEMORY.md`. We copy that policy, not the sidecar runtime: the main-session agent calls `memory_write`; the store upserts by slug, refuses near-duplicates, and updates the index. A new fact that disagrees with an existing one is not overwritten — it is a Conflict, and that same session must tell the owner. A later Dream pass (gated LLM housekeeping) was considered and rejected so we do not grow a second product surface ZCode does not have. Manual `memory_dream` may remain as a CLI escape hatch, not as the design.

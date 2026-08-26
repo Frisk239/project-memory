@@ -1,7 +1,9 @@
-import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { homedir } from "node:os";
+import { ensureGitignored, isGitRepo } from "./core/gitignore.js";
+import { patchKiroAgentFrontmatter, shouldPatchKiroAgent } from "./core/kiro-agent.js";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const CLI = join(ROOT, "dist", "cli.js");
@@ -31,7 +33,14 @@ export function doctorAgents(): string {
   ok("claude hooks", jsonHas(join(homedir(), ".claude", "settings.json"), MARKER), "");
   ok("claude mcp", jsonHas(join(homedir(), ".claude.json"), "project-memory"), "");
   ok("kiro mcp", jsonHas(join(homedir(), ".kiro", "settings", "mcp.json"), "project-memory"), "");
-  ok("kiro agent hooks", jsonHas(join(homedir(), ".kiro", "agents", "engineer.md"), "agentSpawn"), "");
+  const kiroUserHooks = join(homedir(), ".kiro", "hooks", "project-memory.json");
+  ok("kiro user hooks", jsonHas(kiroUserHooks, "SessionStart") && jsonHas(kiroUserHooks, MARKER), kiroUserHooks);
+  const kiroEngineer = join(homedir(), ".kiro", "agents", "engineer.md");
+  ok(
+    "kiro agent hooks",
+    existsSync(kiroEngineer) && readFileSync(kiroEngineer, "utf8").includes("agentSpawn"),
+    kiroEngineer,
+  );
   ok("commandcode mcp", jsonHas(join(homedir(), ".commandcode", "mcp.json"), "project-memory"), "");
   ok("gemini mcp", jsonHas(join(homedir(), ".gemini", "config", "mcp_config.json"), "project-memory"), "");
   ok("grok hooks", existsSync(join(homedir(), ".grok", "hooks", "project-memory.json")), "");
@@ -58,6 +67,9 @@ export function installAgents(opts: { cwd?: string; agents: string[] }): string 
     else reports.push(`skip unknown agent: ${agent}`);
   }
   reports.push(installSkill());
+  if (opts.cwd && isGitRepo(opts.cwd)) {
+    reports.push(`gitignore: .memory/ ${ensureGitignored(opts.cwd)}`);
+  }
   return reports.join("\n");
 }
 
@@ -320,27 +332,26 @@ function installKiro(): string {
     )}\n`,
     "utf8",
   );
-  patchKiroEngineerHooks();
-  return "kiro: mcp.json + hooks + engineer.md agentSpawn/userPromptSubmit/stop";
+  const patched = patchKiroAgentFiles();
+  return `kiro: mcp.json + user hooks + agent files (${patched.join(", ") || "none"})`;
 }
 
-function patchKiroEngineerHooks(): void {
-  const file = join(homedir(), ".kiro", "agents", "engineer.md");
-  if (!existsSync(file)) return;
-  const raw = readFileSync(file, "utf8");
-  const match = raw.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/);
-  if (!match) return;
-  let front = match[1];
-  const spawnCmd = JSON.stringify(`node "${CLI}" hook --event agentSpawn --plain`);
-  const promptCmd = JSON.stringify(`node "${CLI}" hook --event userPromptSubmit --plain`);
-  const stopCmd = JSON.stringify(`node "${CLI}" hook --event stop --plain`);
-  const hookYaml = `hooks:\n  agentSpawn:\n    - command: ${spawnCmd}\n  userPromptSubmit:\n    - command: ${promptCmd}\n  stop:\n    - command: ${stopCmd}`;
-  if (/^hooks:/m.test(front)) {
-    front = front.replace(/^hooks:[\s\S]*/m, hookYaml);
-  } else {
-    front = `${front.trimEnd()}\n${hookYaml}`;
+function patchKiroAgentFiles(): string[] {
+  const dir = join(homedir(), ".kiro", "agents");
+  if (!existsSync(dir)) return [];
+  const patched: string[] = [];
+  for (const ent of readdirSync(dir, { withFileTypes: true })) {
+    if (!ent.isFile()) continue;
+    const name = ent.name;
+    const file = join(dir, name);
+    const raw = readFileSync(file, "utf8");
+    if (!shouldPatchKiroAgent(name, raw)) continue;
+    const next = patchKiroAgentFrontmatter(raw, CLI);
+    if (!next || next === raw) continue;
+    writeFileSync(file, next, "utf8");
+    patched.push(name);
   }
-  writeFileSync(file, `---\n${front}\n---\n${match[2]}`, "utf8");
+  return patched;
 }
 
 function installCommandCode(): string {

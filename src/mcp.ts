@@ -4,7 +4,7 @@ import { z } from "zod";
 import { applyDream, DreamLockError, formatDreamReport } from "./core/dream.js";
 import { forgetEntry, listIndex, readEntry, readIndexText, saveEntry, searchEntries, SimilarTopicError } from "./core/store.js";
 import { MEMORY_TYPES } from "./core/types.js";
-import { normalizeWriteInput } from "./mcp-write.js";
+import { conflictMessage, normalizeWriteInput } from "./mcp-write.js";
 
 export async function startMcp(): Promise<void> {
   const server = new McpServer({ name: "project-memory", version: "0.1.0" });
@@ -48,13 +48,16 @@ export async function startMcp(): Promise<void> {
       type: z.enum(MEMORY_TYPES).describe("user | feedback | project | reference"),
       body: z.string().optional().describe("Full text: fact, Why, How to apply. Alias: content"),
       content: z.string().optional().describe("Alias for body"),
-      pin: z.boolean().optional().describe("If true, dream will not forget or merge this topic away"),
+      pin: z.boolean().optional().describe("If true, conflict/dream will not overwrite or merge this topic away"),
     },
     async (args) => {
       const parsed = normalizeWriteInput(args);
       if (!parsed.ok) return { content: [{ type: "text" as const, text: parsed.error }], isError: true };
       try {
         const saved = saveEntry({ ...parsed.entry, origin: "mcp" });
+        if (saved.conflict) {
+          return { content: [{ type: "text" as const, text: conflictMessage(saved.conflict) }] };
+        }
         return { content: [{ type: "text" as const, text: `wrote ${saved.name}\n- ${saved.name} — ${saved.description}` }] };
       } catch (error) {
         if (error instanceof SimilarTopicError) {

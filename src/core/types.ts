@@ -9,11 +9,14 @@ export type MemoryEntry = {
   body: string;
   origin?: string;
   pin?: boolean;
+  /** Slug of the disagreeing sibling. Both entries stay; the owner decides. */
+  conflictWith?: string;
 };
 
 export type MemoryIndexItem = {
   name: string;
   description: string;
+  conflictWith?: string;
 };
 
 export function isMemoryType(value: string): value is MemoryType {

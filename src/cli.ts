@@ -4,7 +4,9 @@ import { applyDream, formatDreamReport } from "./core/dream.js";
 import { forgetEntry, listIndex, readEntry, readIndexText, saveEntry, searchEntries } from "./core/store.js";
 import { isMemoryType, type MemoryType } from "./core/types.js";
 import { compactFlush, sessionContext } from "./hooks/context.js";
-import { handleHook, hookPlainText, type HookInput } from "./hooks/protocol.js";
+import { conflictMessage } from "./mcp-write.js";
+import { handleHook, hookPlainText, resolveCwd, type HookInput } from "./hooks/protocol.js";
+import { rememberRoot } from "./core/paths.js";
 import { doctorAgents, installAgents } from "./install.js";
 
 const args = process.argv.slice(2);
@@ -54,7 +56,10 @@ async function dispatch(cmd: string, rest: string[]): Promise<void> {
         },
         cwd,
       );
-      print(`wrote ${saved.name}`);
+      // Conflict still wrote the sibling file: instruct, exit 0. Only a
+      // SimilarTopicError (thrown, no write) exits non-zero.
+      if (saved.conflict) print(conflictMessage(saved.conflict));
+      else print(`wrote ${saved.name}`);
       return;
     }
     case "search": {
@@ -115,6 +120,9 @@ function runHook(rest: string[]): void {
   const raw = readFileSync(0, "utf8").trim();
   const input = (raw ? JSON.parse(raw) : {}) as HookInput;
   if (event) input.hook_event_name = event;
+  // Hook processes are spawned with the workspace as cwd, so stamp the root
+  // for cwd-less clients (Kiro MCP) to recover later.
+  rememberRoot(resolveCwd(input) || process.cwd());
   const output = handleHook(input, flavor ? { flavor } : undefined);
   if (rest.includes("--plain")) {
     const text = hookPlainText(output);

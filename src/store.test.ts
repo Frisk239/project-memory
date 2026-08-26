@@ -1,9 +1,19 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, test } from "node:test";
-import { forgetEntry, listIndex, readEntry, saveEntry, searchEntries, SimilarTopicError, writeEntry } from "./core/store.js";
+import { entryPath, indexPath } from "./core/paths.js";
+import {
+  forgetEntry,
+  listIndex,
+  readEntry,
+  rebuildIndex,
+  saveEntry,
+  searchEntries,
+  SimilarTopicError,
+  writeEntry,
+} from "./core/store.js";
 
 const dirs: string[] = [];
 
@@ -135,4 +145,100 @@ test("writeEntry persists pin in frontmatter", () => {
   });
   const entry = readEntry("keep-pin");
   assert.equal(entry?.pin, true);
+});
+
+const DIVERGE_A = "Use pnpm for install and scripts in this repo because the workspace demands it.";
+const DIVERGE_B = "Never use pnpm here; the toolchain only supports plain npm with a committed lockfile.";
+
+test("same slug, similar body → upsert, no conflict, one index line", () => {
+  isolated();
+  saveEntry({ name: "pkg-mgr", description: "old", type: "project", body: DIVERGE_A });
+  const r = saveEntry({ name: "pkg-mgr", description: "new", type: "project", body: `${DIVERGE_A} And for CI.` });
+  assert.equal(r.conflict, undefined);
+  assert.equal(listIndex().length, 1);
+});
+
+test("same slug, diverging body → sibling written, original untouched, both marked", () => {
+  isolated();
+  const first = saveEntry({ name: "pkg-mgr", description: "use pnpm", type: "project", body: DIVERGE_A });
+  const originalBytes = readFileSync(entryPath("pkg-mgr"), "utf8");
+  const r = saveEntry({ name: "pkg-mgr", description: "use npm", type: "project", body: DIVERGE_B });
+  assert.ok(r.conflict, "expected a conflict result");
+  assert.equal(r.conflict?.keptSlug, "pkg-mgr");
+  assert.equal(r.conflict?.newSlug, "pkg-mgr-conflict");
+  // Original file body unchanged except the conflict pointer in frontmatter.
+  const kept = readEntry("pkg-mgr");
+  assert.equal(kept?.body, first.body);
+  assert.equal(kept?.conflictWith, "pkg-mgr-conflict");
+  // Sibling exists and points back.
+  const sibling = readEntry("pkg-mgr-conflict");
+  assert.match(sibling?.body ?? "", /Never use pnpm/);
+  assert.equal(sibling?.conflictWith, "pkg-mgr");
+  // Index has two lines, both flagged.
+  const idx = listIndex();
+  assert.equal(idx.length, 2);
+  assert.ok(idx.every((i) => i.conflictWith));
+  // sanity: originalBytes actually differed from post-write (pointer added)
+  assert.notEqual(originalBytes, readFileSync(entryPath("pkg-mgr"), "utf8"));
+});
+
+test("new slug, title-overlap + diverging body → both stay under own slugs, marked", () => {
+  isolated();
+  saveEntry({ name: "package-manager-rule", description: "package manager rule", type: "project", body: DIVERGE_A });
+  const r = saveEntry({ name: "package-manager-rules", description: "package manager rule", type: "project", body: DIVERGE_B });
+  assert.ok(r.conflict, "expected conflict");
+  assert.equal(r.name, "package-manager-rules"); // kept its own slug (forceSlug)
+  assert.ok(readEntry("package-manager-rule"));
+  assert.ok(readEntry("package-manager-rules"));
+  assert.equal(listIndex().length, 2);
+});
+
+test("new slug, close + similar body → SimilarTopicError, no new file", () => {
+  isolated();
+  saveEntry({ name: "use-pnpm", description: "Always use pnpm", type: "feedback", body: PNPM_BODY });
+  assert.throws(
+    () => saveEntry({ name: "prefer-pnpm", description: "Prefer pnpm", type: "feedback", body: PNPM_BODY }),
+    (e: unknown) => e instanceof SimilarTopicError,
+  );
+  assert.equal(readEntry("prefer-pnpm"), null);
+});
+
+test("pinned same slug + diverging body → pin file body unchanged, sibling created", () => {
+  isolated();
+  const pinned = saveEntry({ name: "pinned-fact", description: "pinned", type: "project", body: DIVERGE_A, pin: true });
+  const r = saveEntry({ name: "pinned-fact", description: "counter", type: "project", body: DIVERGE_B });
+  assert.ok(r.conflict);
+  const kept = readEntry("pinned-fact");
+  assert.equal(kept?.body, pinned.body);
+  assert.equal(kept?.pin, true);
+  assert.ok(readEntry("pinned-fact-conflict"));
+});
+
+test("pinned same slug + similar body → upsert in place, keep pin, no sibling", () => {
+  isolated();
+  saveEntry({ name: "pinned-fact", description: "pinned", type: "project", body: DIVERGE_A, pin: true });
+  const r = saveEntry({
+    name: "pinned-fact",
+    description: "pinned (updated)",
+    type: "project",
+    body: `${DIVERGE_A} Also for CI.`,
+  });
+  assert.equal(r.conflict, undefined);
+  assert.equal(r.name, "pinned-fact");
+  const kept = readEntry("pinned-fact");
+  assert.equal(kept?.pin, true);
+  assert.match(kept?.body ?? "", /Also for CI/);
+  assert.equal(readEntry("pinned-fact-conflict"), null);
+  assert.equal(listIndex().length, 1);
+});
+
+test("rebuildIndex keeps conflictWith from topic frontmatter", () => {
+  isolated();
+  saveEntry({ name: "pkg-mgr", description: "use pnpm", type: "project", body: DIVERGE_A });
+  saveEntry({ name: "pkg-mgr", description: "use npm", type: "project", body: DIVERGE_B });
+  rebuildIndex();
+  const idx = listIndex();
+  assert.equal(idx.length, 2);
+  assert.ok(idx.every((item) => item.conflictWith), "index rows should still be flagged after rebuild");
+  assert.match(readFileSync(indexPath(), "utf8"), /\[conflict:/);
 });

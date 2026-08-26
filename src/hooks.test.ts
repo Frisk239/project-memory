@@ -39,6 +39,7 @@ test("Stop injects write reminder only", () => {
   const text = (out as { hookSpecificOutput: { additionalContext: string } }).hookSpecificOutput.additionalContext;
   assert.match(text, /memory_write/);
   assert.match(text, /do nothing/i);
+  assert.match(text, /do not need to be told/);
   assert.doesNotMatch(text, /MEMORY\.md/);
 });
 
@@ -148,6 +149,8 @@ test("injected rules treat memories as snapshots and forbid secrets; index has n
   assert.match(text, /live repo/i);
   assert.match(text, /current user instructions/i);
   assert.match(text, /secret/i);
+  assert.match(text, /you do not have to be told/i);
+  assert.match(text, /conflict/i);
   assert.doesNotMatch(text, /\bupdated:/i);
   assert.doesNotMatch(text, /\d{4}-\d{2}-\d{2}T\d{2}:/);
   assert.match(text, /no-sed/);
