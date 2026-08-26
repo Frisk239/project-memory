@@ -30,6 +30,8 @@ Do not wait until a fact is "stable across many sessions". Multi-source research
 - **similar-topic** (a *new* slug that is too close to an existing one): retry with the existing slug so it upserts.
 - **conflict** (the new fact **disagrees** with an existing one): the write still succeeded — both entries stay on disk, flagged `[conflict: …]` in the index. **Tell the owner both slugs and let them decide.** Do not merge, delete, or pick a winner. That is the owner's call, not yours.
 
+An extension of the same fact upserts; a disagreeing rewrite keeps both and tells the owner.
+
 ## Correct
 
 Recalled memories are snapshots and can be wrong.

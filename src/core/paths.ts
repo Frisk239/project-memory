@@ -79,10 +79,13 @@ export function entryPath(name: string, cwd?: string): string {
 }
 
 export function slugify(name: string): string {
+  // Keep Han so a Chinese-only name does not collapse to the fallback "memory"
+  // (two topics would otherwise share one file and skip conflict). Latin slugs
+  // unchanged. Ceiling: other non-latin scripts still drop.
   const slug = name
     .trim()
     .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/[^\p{Script=Han}a-z0-9]+/gu, "-")
     .replace(/^-+|-+$/g, "");
   return slug || "memory";
 }

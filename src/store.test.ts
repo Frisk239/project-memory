@@ -3,7 +3,8 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, test } from "node:test";
-import { entryPath, indexPath } from "./core/paths.js";
+import { entryPath, indexPath, slugify } from "./core/paths.js";
+import { BODY_DIVERGE, BODY_SIMILAR, bodyScore, overlapScore } from "./core/similarity.js";
 import {
   forgetEntry,
   listIndex,
@@ -150,7 +151,7 @@ test("writeEntry persists pin in frontmatter", () => {
 const DIVERGE_A = "Use pnpm for install and scripts in this repo because the workspace demands it.";
 const DIVERGE_B = "Never use pnpm here; the toolchain only supports plain npm with a committed lockfile.";
 
-test("same slug, similar body → upsert, no conflict, one index line", () => {
+test("same slug, latin extension → upsert, no conflict, one index line", () => {
   isolated();
   saveEntry({ name: "pkg-mgr", description: "old", type: "project", body: DIVERGE_A });
   const r = saveEntry({ name: "pkg-mgr", description: "new", type: "project", body: `${DIVERGE_A} And for CI.` });
@@ -230,6 +231,138 @@ test("pinned same slug + similar body → upsert in place, keep pin, no sibling"
   assert.match(kept?.body ?? "", /Also for CI/);
   assert.equal(readEntry("pinned-fact-conflict"), null);
   assert.equal(listIndex().length, 1);
+});
+
+const CN_LEDGER =
+  "采用仓库内明文记忆，不写向量库，整理由人触发。空账本是正常状态。";
+const CN_DEPLOY =
+  "生产环境由主分支自动发布，不走本地打包，禁止在开发机直接推制品。";
+
+test("same slug, diverging Chinese bodies → sibling, original body kept", () => {
+  isolated();
+  const first = saveEntry({
+    name: "ledger-policy",
+    description: "账本策略",
+    type: "project",
+    body: CN_LEDGER,
+  });
+  const r = saveEntry({
+    name: "ledger-policy",
+    description: "发布方式",
+    type: "project",
+    body: CN_DEPLOY,
+  });
+  assert.ok(r.conflict, "Chinese disagreement must not silently overwrite");
+  assert.equal(r.conflict?.keptSlug, "ledger-policy");
+  assert.equal(readEntry("ledger-policy")?.body, first.body);
+  assert.match(readEntry(r.conflict?.newSlug ?? "")?.body ?? "", /主分支自动发布/);
+  assert.equal(listIndex().length, 2);
+});
+
+test("same slug, Chinese extension → upsert, no conflict", () => {
+  isolated();
+  saveEntry({
+    name: "ledger-policy",
+    description: "账本策略",
+    type: "project",
+    body: CN_LEDGER,
+  });
+  const r = saveEntry({
+    name: "ledger-policy",
+    description: "账本策略",
+    type: "project",
+    body: `${CN_LEDGER}下次会话先读索引。`,
+  });
+  assert.equal(r.conflict, undefined);
+  assert.equal(listIndex().length, 1);
+  assert.match(readEntry("ledger-policy")?.body ?? "", /下次会话先读索引/);
+});
+
+const GRAY_A = "alpha bravo charlie delta echo foxtrot";
+const GRAY_B = "alpha bravo charlie delta golf hotel india juliet";
+
+test("same slug, gray rewrite that is not an extension → conflict sibling", () => {
+  isolated();
+  const j = bodyScore(GRAY_A, GRAY_B);
+  assert.ok(j >= BODY_DIVERGE && j < BODY_SIMILAR, `expected gray Jaccard, got ${j}`);
+  assert.ok(overlapScore(GRAY_A, GRAY_B) < BODY_SIMILAR);
+  saveEntry({ name: "gray-fact", description: "gray a", type: "project", body: GRAY_A });
+  const r = saveEntry({ name: "gray-fact", description: "gray b", type: "project", body: GRAY_B });
+  assert.ok(r.conflict, "gray non-containment must not silently overwrite");
+  assert.equal(readEntry("gray-fact")?.body, GRAY_A);
+  assert.equal(readEntry(r.conflict?.newSlug ?? "")?.body, GRAY_B);
+  assert.equal(listIndex().length, 2);
+});
+
+test("new slug, similar Chinese topic → SimilarTopicError, no new file", () => {
+  isolated();
+  saveEntry({
+    name: "ledger-policy",
+    description: "账本策略",
+    type: "project",
+    body: CN_LEDGER,
+  });
+  assert.throws(
+    () =>
+      saveEntry({
+        name: "ledger-notes",
+        description: "账本策略",
+        type: "project",
+        body: `${CN_LEDGER}读索引。`,
+      }),
+    (error: unknown) => error instanceof SimilarTopicError,
+  );
+  assert.equal(readEntry("ledger-notes"), null);
+  assert.equal(listIndex().length, 1);
+});
+
+test("Chinese-only names keep distinct files and can conflict", () => {
+  isolated();
+  saveEntry({ name: "发布方式", description: "发布方式", type: "project", body: CN_DEPLOY });
+  const r = saveEntry({ name: "发布方式", description: "发布方式", type: "project", body: CN_LEDGER });
+  assert.ok(r.conflict);
+  assert.ok(readEntry("发布方式"));
+  assert.ok(readEntry(r.conflict?.newSlug ?? ""));
+  assert.notEqual(slugify("发布方式"), "memory");
+});
+
+test("forget the conflict sibling clears the kept file pointer and index flag", () => {
+  isolated();
+  saveEntry({ name: "pkg-mgr", description: "use pnpm", type: "project", body: DIVERGE_A });
+  saveEntry({ name: "pkg-mgr", description: "use npm", type: "project", body: DIVERGE_B });
+  assert.equal(forgetEntry("pkg-mgr-conflict"), true);
+  assert.equal(readEntry("pkg-mgr-conflict"), null);
+  const kept = readEntry("pkg-mgr");
+  assert.equal(kept?.conflictWith, undefined);
+  assert.equal(listIndex().length, 1);
+  assert.doesNotMatch(readFileSync(indexPath(), "utf8"), /\[conflict:/);
+});
+
+test("forget a pinned topic still removes it", () => {
+  isolated();
+  saveEntry({ name: "pinned-fact", description: "pinned", type: "project", body: DIVERGE_A, pin: true });
+  assert.equal(forgetEntry("pinned-fact"), true);
+  assert.equal(readEntry("pinned-fact"), null);
+  assert.equal(listIndex().length, 0);
+});
+
+test("similar upsert on a flagged topic keeps conflictWith and index [conflict:]", () => {
+  isolated();
+  saveEntry({ name: "pkg-mgr", description: "use pnpm", type: "project", body: DIVERGE_A });
+  saveEntry({ name: "pkg-mgr", description: "use npm", type: "project", body: DIVERGE_B });
+  const r = saveEntry({
+    name: "pkg-mgr",
+    description: "use pnpm (updated)",
+    type: "project",
+    body: `${DIVERGE_A} Also for CI.`,
+  });
+  assert.equal(r.conflict, undefined);
+  const kept = readEntry("pkg-mgr");
+  assert.equal(kept?.conflictWith, "pkg-mgr-conflict");
+  assert.match(kept?.body ?? "", /Also for CI/);
+  assert.equal(listIndex().length, 2);
+  assert.match(readFileSync(indexPath(), "utf8"), /\[conflict:/);
+  assert.equal(listIndex().find((item) => item.name === "pkg-mgr")?.conflictWith, "pkg-mgr-conflict");
 });
 
 test("rebuildIndex keeps conflictWith from topic frontmatter", () => {

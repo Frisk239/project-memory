@@ -48,7 +48,7 @@ export async function startMcp(): Promise<void> {
       type: z.enum(MEMORY_TYPES).describe("user | feedback | project | reference"),
       body: z.string().optional().describe("Full text: fact, Why, How to apply. Alias: content"),
       content: z.string().optional().describe("Alias for body"),
-      pin: z.boolean().optional().describe("If true, conflict/dream will not overwrite or merge this topic away"),
+      pin: z.boolean().optional().describe("If true, dream will not auto-forget or merge this topic. A disagreeing write still creates a sibling; memory_forget still deletes."),
     },
     async (args) => {
       const parsed = normalizeWriteInput(args);

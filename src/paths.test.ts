@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, test } from "node:test";
-import { rememberRoot, resolveProjectRoot } from "./core/paths.js";
+import { rememberRoot, resolveProjectRoot, slugify } from "./core/paths.js";
 
 const dirs: string[] = [];
 let savedHome: string | undefined;
@@ -68,6 +68,13 @@ test("PROJECT_MEMORY_ROOT overrides the cache", () => {
   rememberRoot(known);
   process.env.PROJECT_MEMORY_ROOT = override;
   assert.equal(resolveProjectRoot(tmpDir("pmem-cwd-")), override);
+});
+
+test("slugify keeps Han so two Chinese names do not collapse to memory", () => {
+  assert.equal(slugify("use-pnpm"), "use-pnpm");
+  assert.notEqual(slugify("发布方式"), "memory");
+  assert.notEqual(slugify("调研结论"), "memory");
+  assert.notEqual(slugify("发布方式"), slugify("调研结论"));
 });
 
 test("rememberRoot ignores a non-existent root", () => {

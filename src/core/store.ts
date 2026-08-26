@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, unlinkSync, writeFile
 import { basename, dirname, join } from "node:path";
 import { ensureGitignored, isGitRepo } from "./gitignore.js";
 import { entryPath, indexPath, memoryDir, slugify } from "./paths.js";
-import { BODY_DIVERGE, bodyScore, isCloseTopic, titleScore, tokens, TITLE_OVERLAP } from "./similarity.js";
+import { BODY_DIVERGE, bodiesAgree, bodyScore, isCloseTopic, titleScore, TITLE_OVERLAP } from "./similarity.js";
 import { isMemoryType, type MemoryEntry, type MemoryIndexItem, type MemoryType } from "./types.js";
 
 const INDEX_LINE_LIMIT = 200;
@@ -66,6 +66,7 @@ export function writeEntry(entry: MemoryEntry, cwd?: string): MemoryEntry {
     ...entry,
     name,
     pin: entry.pin ?? previous?.pin,
+    conflictWith: entry.conflictWith ?? previous?.conflictWith,
   };
   writeFileSync(entryPath(name, cwd), renderEntry(saved), "utf8");
   upsertIndex(saved, cwd);
@@ -84,8 +85,8 @@ export type SaveResult = MemoryEntry & {
 
 /**
  * Create or update, organizing at write.
- * - Same slug, similar/empty-previous body → upsert (keep pin).
- * - Same slug, diverging body → conflict: keep the old file untouched, write
+ * - Same slug, bodiesAgree (similar, empty previous, or gray containment) → upsert (keep pin).
+ * - Same slug, disagreeing body → conflict: keep the old file untouched, write
  *   the incoming under `{slug}-conflict[-n]`, mark both.
  * - New slug, close topic + similar body → SimilarTopicError (use that slug).
  * - New slug, title-overlap + diverging body → conflict: write the new slug,
@@ -98,14 +99,12 @@ export function saveEntry(entry: MemoryEntry, cwd?: string): SaveResult {
   const existing = readEntry(name, cwd);
 
   if (existing) {
-    const prevEmpty = tokens(existing.body).size === 0;
-    const diverges = !prevEmpty && bodyScore(entry.body, existing.body) < BODY_DIVERGE;
-    if (diverges) {
-      // Disagreeing fact: keep the original (pin or not), write a sibling.
-      return conflictWrite(entry, existing, name, cwd);
+    if (bodiesAgree(existing.body, entry.body)) {
+      // Bodies agree (or previous was empty): upsert in place, keep pin.
+      return writeEntry(entry, cwd);
     }
-    // Bodies agree (or previous was empty): upsert in place, keep pin.
-    return writeEntry(entry, cwd);
+    // Disagreeing fact: keep the original (pin or not), write a sibling.
+    return conflictWrite(entry, existing, name, cwd);
   }
 
   // New slug: check nearby topics.
@@ -175,8 +174,16 @@ function ensureLedgerIgnored(memDir: string): void {
 export function forgetEntry(name: string, cwd?: string): boolean {
   const file = entryPath(name, cwd);
   if (!existsSync(file)) return false;
+  const forgotten = slugify(name);
   unlinkSync(file);
-  const items = listIndex(cwd).filter((item) => item.name !== slugify(name));
+  // Clear dangling conflict: pointers so the index does not keep [conflict: deleted].
+  for (const entry of listEntries(cwd)) {
+    if (entry.conflictWith !== forgotten) continue;
+    writeFileSync(entryPath(entry.name, cwd), renderEntry({ ...entry, conflictWith: undefined }), "utf8");
+  }
+  const items = listIndex(cwd)
+    .filter((item) => item.name !== forgotten)
+    .map((item) => (item.conflictWith === forgotten ? { ...item, conflictWith: undefined } : item));
   writeIndex(items, cwd);
   return true;
 }
