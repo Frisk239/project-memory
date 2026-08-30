@@ -1,16 +1,15 @@
 ---
-description: Consolidate project .memory files (dream) — dedupe, drop empty, flag conflicts
+description: Consolidate project .memory files (dream) — dedupe, drop empty, report semantic cleanup candidates
 ---
 
-Consolidate this project's `.memory/` store. Follow Claude Code Auto-Dream and Mem0 `/mem0-dream` practice: merge duplicates, drop empty/stale chatter, never invent facts, never auto-resolve true conflicts.
+Consolidate this project's `.memory/` store. Merge deterministic duplicates, drop empty chatter, and report semantic cleanup candidates for agent judgment. Never invent facts.
 
 1. Call MCP `memory_dream` with `dryRun: true` (or run `node dist/cli.js dream --dry-run` from the project-memory checkout).
-2. Show the report. Safe ops are index rebuild, empty-file delete, and identical-body merges. Pinned topics stay. Stale TODO/Next (>14 days) and relative dates are proposed only.
-3. If the user did not pass `apply` as an argument, stop after the dry-run unless they confirm.
-4. Call `memory_dream` with `dryRun: false` to apply **safe** ops only. If a lock error is returned, wait or tell the user `.memory/.dream.lock` is held.
-5. For each **proposed** merge/conflict: `memory_read` both slugs. If they agree, `memory_write` one merged body (same slug or the `keep` slug) with Fact / Why / How to apply, then `memory_forget` the extra slug. If they disagree, do not merge — tell the user both facts and wait.
-6. For **relative-date** proposals: rewrite the body with absolute dates (YYYY-MM-DD), do not invent facts.
-7. For **stale** TODO/Next proposals: ask before deleting; never auto-delete.
-8. `memory_index` at the end. Confirm the index lines you changed.
+2. Show the report. Deterministic safe ops are index rebuild, empty-file delete, and identical-body merges. Pinned topics stay during dream's automatic forget/merge.
+3. If the user passed `apply`, call `memory_dream` with `dryRun: false` to apply deterministic safe ops. If a lock error is returned, wait or tell the user `.memory/.dream.lock` is held.
+4. For each semantic candidate: `memory_read` the relevant slug(s). If evidence is sufficient, `memory_write` the corrected canonical slug and `memory_forget` obsolete duplicates. Do not ask the user merely for approval; ask only when evidence is insufficient.
+5. For **relative-date** candidates: rewrite the body with absolute dates (YYYY-MM-DD) only when the exact date is known.
+6. For **stale** TODO/Next candidates: refresh or delete when repo/history evidence shows the note is obsolete.
+7. `memory_index` at the end. Confirm the index lines you changed.
 
 Do not write MEMORY.md as a topic. Do not store secrets. Arguments: $ARGUMENTS

@@ -2,7 +2,7 @@ import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, 
 import { basename, dirname, join } from "node:path";
 import { ensureGitignored, isGitRepo } from "./gitignore.js";
 import { entryPath, indexPath, memoryDir, slugify, topicSlug } from "./paths.js";
-import { BODY_DIVERGE, bodiesAgree, bodyScore, isCloseTopic, titleScore, TITLE_OVERLAP } from "./similarity.js";
+import { isCloseTopic } from "./similarity.js";
 import { isMemoryType, type MemoryEntry, type MemoryIndexItem, type MemoryType } from "./types.js";
 
 const INDEX_LINE_LIMIT = 200;
@@ -85,33 +85,26 @@ function writeEntryUnlocked(entry: MemoryEntry, cwd?: string): MemoryEntry {
     description: oneLine(entry.description),
     origin: entry.origin ? oneLine(entry.origin) : undefined,
     pin: entry.pin ?? previous?.pin,
-    conflictWith: entry.conflictWith ?? previous?.conflictWith,
+    conflictWith: entry.conflictWith,
   };
   writeFileAtomic(entryPath(name, cwd), renderEntry(saved));
   upsertIndex(saved, cwd);
   return saved;
 }
 
-/**
- * Result of a write. `conflict` means the incoming fact disagreed with an
- * existing one: both stay on disk, the caller must tell the owner and must not
- * pick a winner. `.name`/`.description`/etc mirror the entry that was written
- * (the sibling on conflict) so existing callers keep working.
- */
-export type SaveResult = MemoryEntry & {
-  conflict?: { keptSlug: string; newSlug: string };
-};
+export type SaveResult = MemoryEntry;
 
 /**
  * Create or update, organizing at write.
- * - Same slug, bodiesAgree (similar, empty previous, or gray containment) → upsert (keep pin).
- * - Same slug, disagreeing body → conflict: keep the old file untouched, write
- *   the incoming under `{slug}-conflict[-n]`, mark both.
- * - New slug, close topic + similar body → SimilarTopicError (use that slug).
- * - New slug, title-overlap + diverging body → conflict: write the new slug,
- *   mark both.
+ * - Same slug → upsert/replace in place (keep pin unless explicitly changed).
+ * - New slug close to an existing topic → SimilarTopicError (reuse that slug
+ *   to update, or pick a more distinct name).
  * - New slug, not close → create.
- * A pinned topic is never overwritten; the incoming still gets a sibling file.
+ *
+ * Updating or deleting memory is an agent judgment, not a human approval
+ * boundary. The store stays deterministic: it prevents accidental duplicate
+ * topics, but it does not create new conflict siblings that require a person
+ * to arbitrate later.
  */
 export function saveEntry(entry: MemoryEntry, cwd?: string): SaveResult {
   return withStoreLock(cwd, () => saveEntryUnlocked(entry, cwd));
@@ -120,28 +113,10 @@ export function saveEntry(entry: MemoryEntry, cwd?: string): SaveResult {
 function saveEntryUnlocked(entry: MemoryEntry, cwd?: string): SaveResult {
   const name = slugify(entry.name);
   const existing = readEntry(name, cwd);
-
-  if (existing) {
-    if (bodiesAgree(existing.body, entry.body)) {
-      // Bodies agree (or previous was empty): upsert in place, keep pin.
-      return writeEntry(entry, cwd);
-    }
-    // Disagreeing fact: keep the original (pin or not), write a sibling.
-    return conflictWrite(entry, existing, name, cwd);
-  }
+  if (existing) return writeEntry(entry, cwd);
 
   // New slug: check nearby topics.
   const entries = listEntries(cwd);
-  for (const other of entries) {
-    const bodies = bodyScore(entry.body, other.body);
-    const titles = titleScore(entry, other);
-    if (bodies >= BODY_DIVERGE) continue; // not a divergence; similar handled below
-    if (titles >= TITLE_OVERLAP) {
-      // Overlapping title but diverging body → conflict: keep both under the
-      // caller's own slug, mark both.
-      return conflictWrite(entry, other, name, cwd, name);
-    }
-  }
   if (!existsSync(entryPath(name, cwd))) {
     const hits = entries.filter((existingEntry) => isCloseTopic(entry, existingEntry));
     if (hits.length) {
@@ -149,37 +124,6 @@ function saveEntryUnlocked(entry: MemoryEntry, cwd?: string): SaveResult {
     }
   }
   return writeEntry(entry, cwd);
-}
-
-/**
- * Persist a disagreeing incoming fact next to `kept` without overwriting it.
- * If `forceSlug` is given (new-slug title-overlap case) the incoming keeps its
- * own slug; otherwise it lands under `{base}-conflict[-n]`.
- */
-function conflictWrite(
-  entry: MemoryEntry,
-  kept: MemoryEntry,
-  base: string,
-  cwd: string | undefined,
-  forceSlug?: string,
-): SaveResult {
-  const newSlug = forceSlug ?? nextConflictSlug(base, cwd);
-  const saved = writeEntry({ ...entry, name: newSlug, conflictWith: kept.name }, cwd);
-  // Mark the kept file too, without disturbing its body: re-render with the
-  // conflict pointer, and flag its index row.
-  writeFileAtomic(entryPath(kept.name, cwd), renderEntry({ ...kept, conflictWith: newSlug }));
-  flagIndexConflict(kept.name, newSlug, cwd);
-  return { ...saved, conflict: { keptSlug: kept.name, newSlug } };
-}
-
-function nextConflictSlug(base: string, cwd?: string): string {
-  let slug = `${base}-conflict`;
-  let n = 2;
-  while (existsSync(entryPath(slug, cwd))) {
-    slug = `${base}-conflict-${n}`;
-    n += 1;
-  }
-  return slug;
 }
 
 /** On first ledger create, gitignore .memory/ in the repo that owns it. */
@@ -232,14 +176,6 @@ export function searchEntries(query: string, cwd?: string): MemoryIndexItem[] {
 function upsertIndex(entry: MemoryEntry, cwd?: string): void {
   const items = listIndex(cwd).filter((item) => item.name !== entry.name);
   items.unshift({ name: entry.name, description: entry.description, conflictWith: entry.conflictWith });
-  writeIndex(items, cwd);
-}
-
-/** Mark an existing index row as conflicting without touching the file body. */
-function flagIndexConflict(name: string, conflictWith: string, cwd?: string): void {
-  const items = listIndex(cwd).map((item) =>
-    item.name === name ? { ...item, conflictWith } : item,
-  );
   writeIndex(items, cwd);
 }
 

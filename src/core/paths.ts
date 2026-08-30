@@ -58,7 +58,7 @@ export function resolveProjectRoot(cwd = process.cwd(), opts: ResolveOptions = {
   );
 }
 
-function probeFromCwd(cwd: string): string | undefined {
+export function probeFromCwd(cwd: string): string | undefined {
   try {
     const root = execFileSync("git", ["rev-parse", "--show-toplevel"], {
       cwd,

@@ -9,7 +9,7 @@ export type MemoryEntry = {
   body: string;
   origin?: string;
   pin?: boolean;
-  /** Slug of the disagreeing sibling. Both entries stay; the owner decides. */
+  /** Legacy marker for an unresolved disagreeing sibling from older ledgers. */
   conflictWith?: string;
 };
 

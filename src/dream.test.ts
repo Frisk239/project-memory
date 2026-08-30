@@ -45,7 +45,7 @@ test("dream apply forgets exact duplicates and empty files", () => {
   assert.deepEqual(remaining, ["keep-me"]);
 });
 
-test("dream proposes but does not auto-merge similar non-identical bodies", () => {
+test("dream reports similar non-identical bodies for agent judgment", () => {
   isolated();
   writeEntry({
     name: "use-pnpm",
@@ -100,7 +100,7 @@ test("dream apply fails while a lock is held and proceeds after the lock expires
   assert.ok(report.applied.some((op) => op.op === "forget" && op.names.includes("tiny")));
 });
 
-test("dream proposes stale TODO/Next older than 14 days and does not delete it", () => {
+test("dream reports stale TODO/Next older than 14 days for agent judgment", () => {
   isolated();
   writeEntry({
     name: "old-next",
@@ -116,7 +116,7 @@ test("dream proposes stale TODO/Next older than 14 days and does not delete it",
   assert.ok(listIndex().some((item) => item.name === "old-next"));
 });
 
-test("dream proposes relative dates and does not auto-edit the body", () => {
+test("dream reports relative dates for agent judgment", () => {
   isolated();
   writeEntry({
     name: "recent-call",

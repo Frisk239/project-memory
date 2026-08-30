@@ -99,7 +99,7 @@ export function planDream(cwd?: string): DreamOp[] {
           op: "merge",
           names: [a.name, b.name],
           keep: pickKeep([a, b], index),
-          reason: `similar bodies (${pct(bodies)}); needs a human/LLM merge of non-identical text`,
+          reason: `similar bodies (${pct(bodies)}); needs agent judgment before rewriting or deleting non-identical text`,
           safe: false,
         });
       } else if (titles >= TITLE_OVERLAP && bodies < BODY_DIVERGE && a.type === b.type) {
@@ -118,7 +118,7 @@ export function planDream(cwd?: string): DreamOp[] {
       ops.push({
         op: "stale",
         names: [entry.name],
-        reason: "TODO/Next section older than 14 days; review or drop — not auto-deleted",
+        reason: "TODO/Next section older than 14 days; agent may refresh or forget it when obsolete",
         safe: false,
       });
     }
@@ -126,7 +126,7 @@ export function planDream(cwd?: string): DreamOp[] {
       ops.push({
         op: "relative-date",
         names: [entry.name],
-        reason: "relative date wording; convert to an absolute date — not auto-edited",
+        reason: "relative date wording; agent may rewrite with an absolute date when the date is clear",
         safe: false,
       });
     }
@@ -289,7 +289,7 @@ export function formatDreamReport(report: DreamReport): string {
     for (const op of report.applied) lines.push(`  [${op.op}] ${op.names.join(", ")} — ${op.reason}`);
   }
   if (report.proposed.length) {
-    lines.push("proposed (not applied; use /memory-dream or memory_write/forget):");
+    lines.push("needs agent judgment (not applied by dream; inspect with memory_read, then memory_write/forget if appropriate):");
     for (const op of report.proposed) lines.push(`  [${op.op}] ${op.names.join(", ")} — ${op.reason}`);
   }
   if (!report.applied.length && !report.proposed.length) lines.push("nothing to do.");

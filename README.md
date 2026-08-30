@@ -17,8 +17,8 @@ Each checkout or Git worktree owns its local `.memory/` directory. To carry exis
 How it works:
 
 - **Extract after a round** — after a successful turn, the in-session agent writes durable facts itself; you do not have to say 记住. No sidecar model, no background job.
-- **Organize at write** — the same topic reuses the same slug (upsert). A new slug too close to an existing topic is refused so the agent retries the right slug.
-- **Conflict tells the owner** — when a new fact disagrees with an existing one, both entries stay and the agent tells you which two slugs disagree. It never picks a winner, merges, or deletes.
+- **Organize at write** — the same topic reuses the same slug (replace/upsert). A new slug too close to an existing topic is refused so the agent retries the right slug or chooses a distinct one.
+- **Agent-maintained edits** — updating and deleting memories do not require owner approval. If repo evidence or current instructions make a note stale, wrong, or duplicate, the agent may `memory_write` the same slug or `memory_forget` it directly.
 
 Requires **Node 20+**.
 
@@ -64,8 +64,8 @@ node dist/cli.js install --agents kiro --cwd E:\code\your-project
 - **Hooks** (same semantics on every host, different Stop wiring):
   - **Read** at session start / resume / clear / compact (OpenCode: every model call, so the index stays in the rebuilt system prompt)
   - **Extract** after a successful round — durable facts only, organized at write. Claude/ZCode Stop and OpenCode idle say: if nothing durable, do nothing. Codex Stop blocks once with that reminder, then lets the turn end. OpenCode idle stays log-only. Grok omits Stop so the reminder cannot loop.
-- **Skill** `project-memory`: when to read / write / correct, how conflict is handled, what not to store
-- **`memory_dream`** stays as an optional CLI/MCP escape hatch (dry-run default) for manual housekeeping — not part of the normal loop
+- **Skill** `project-memory`: when to read / write / correct / delete, and what not to store
+- **`memory_dream`** stays as an optional CLI/MCP escape hatch (dry-run default) for housekeeping — not part of the normal loop
 
 ## Usage
 
@@ -99,7 +99,7 @@ node dist/cli.js dream --dry-run
 node dist/cli.js dream
 ```
 
-`dream` is an optional escape hatch: it rebuilds `MEMORY.md` from topic files, deletes empty entries, and merges **identical** bodies. Similar or conflicting topics are reported, never auto-merged. Organize already happens at write, so you rarely need this and nothing auto-invokes it.
+`dream` is an optional escape hatch: it rebuilds `MEMORY.md` from topic files, deletes empty entries, and merges **identical** bodies. Similar, stale, relative-date, or legacy conflict candidates are reported for agent judgment; the agent can then use `memory_write` / `memory_forget` directly when the evidence is sufficient. Organize already happens at write, so you rarely need this and nothing auto-invokes it.
 
 ## Uninstall
 

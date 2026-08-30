@@ -4,10 +4,13 @@ import { applyDream, formatDreamReport } from "./core/dream.js";
 import { forgetEntry, listIndex, readEntry, readIndexText, saveEntry, searchEntries } from "./core/store.js";
 import { isMemoryType, type MemoryType } from "./core/types.js";
 import { compactFlush, sessionContext } from "./hooks/context.js";
-import { conflictMessage } from "./mcp-write.js";
 import { handleHook, hookPlainText, readHookInput, resolveCwd } from "./hooks/protocol.js";
-import { rememberRoot } from "./core/paths.js";
+import { rememberRoot, probeFromCwd } from "./core/paths.js";
 import { DEFAULT_AGENTS, doctorAgents, installAgents, uninstallAgents } from "./install.js";
+
+// Declared before the top-level dispatch: module top-level code runs before
+// later declarations initialize, and positionalArgs reads this.
+const VALUE_FLAGS = new Set(["--cwd", "--name", "--description", "--type", "--body", "--origin", "--event", "--flavor", "--agents"]);
 
 const args = process.argv.slice(2);
 const command = args[0] ?? "help";
@@ -31,7 +34,7 @@ async function dispatch(cmd: string, rest: string[]): Promise<void> {
     case "index":
       return print(readIndexText(cwd) || "(empty)");
     case "read": {
-      const name = rest.find((arg) => !arg.startsWith("--"));
+      const name = positionalArgs(rest)[0];
       if (!name) throw new Error("usage: project-memory read <name>");
       const entry = readEntry(name, cwd);
       if (!entry) throw new Error(`memory not found: ${name}`);
@@ -42,7 +45,7 @@ async function dispatch(cmd: string, rest: string[]): Promise<void> {
       const name = flag(rest, "--name");
       const description = flag(rest, "--description") || name;
       const type = (flag(rest, "--type") || "project") as MemoryType;
-      const body = flag(rest, "--body") || rest.filter((arg) => !arg.startsWith("--")).slice(1).join(" ");
+      const body = flag(rest, "--body") || positionalArgs(rest).join(" ");
       if (!name || !body) throw new Error("usage: project-memory write --name <slug> --type <type> --description <text> --body <text>");
       if (!isMemoryType(type)) throw new Error(`invalid type: ${type}`);
       const saved = saveEntry(
@@ -56,20 +59,17 @@ async function dispatch(cmd: string, rest: string[]): Promise<void> {
         },
         cwd,
       );
-      // Conflict still wrote the sibling file: instruct, exit 0. Only a
-      // SimilarTopicError (thrown, no write) exits non-zero.
-      if (saved.conflict) print(conflictMessage(saved.conflict));
-      else print(`wrote ${saved.name}`);
+      print(`wrote ${saved.name}`);
       return;
     }
     case "search": {
-      const query = rest.filter((arg) => !arg.startsWith("--")).join(" ");
+      const query = positionalArgs(rest).join(" ");
       const hits = searchEntries(query, cwd);
       print(hits.length ? hits.map((hit) => `- ${hit.name} — ${hit.description}`).join("\n") : "(no hits)");
       return;
     }
     case "forget": {
-      const name = rest.find((arg) => !arg.startsWith("--"));
+      const name = positionalArgs(rest)[0];
       if (!name) throw new Error("usage: project-memory forget <name>");
       print(forgetEntry(name, cwd) ? `forgot ${name}` : `memory not found: ${name}`);
       return;
@@ -117,9 +117,13 @@ function runHook(rest: string[]): void {
   const flavor = flag(rest, "--flavor");
   const input = readHookInput(process.stdin, () => readFileSync(0, "utf8"));
   if (event) input.hook_event_name = event;
-  // Hook processes are spawned with the workspace as cwd, so stamp the root
-  // for cwd-less clients (Kiro MCP) to recover later.
-  rememberRoot(resolveCwd(input) || process.cwd());
+  // Refresh the last-root cache only from a cwd that actually probes as a
+  // workspace (git root or .memory ancestor). A hook fired outside any
+  // project — a scratch dir, a non-git folder — must not poison the cache
+  // that cwd-less MCP clients fall back to: that is the misdirection the TTL
+  // and the probe-gated stamping exist to prevent.
+  const probed = probeFromCwd(resolveCwd(input) || process.cwd());
+  if (probed) rememberRoot(probed);
   const output = handleHook(input, flavor ? { flavor } : undefined);
   if (rest.includes("--plain")) {
     const text = hookPlainText(output);
@@ -136,6 +140,21 @@ function flag(rest: string[], name: string): string | undefined {
   const index = rest.indexOf(name);
   if (index === -1) return undefined;
   return rest[index + 1];
+}
+
+/** Positional args, skipping flags and the value each value-flag consumed.
+ * Filtering only `--`-prefixed tokens leaked flag values ("--type project"
+ * left "project" in the positional body/search text). */
+function positionalArgs(rest: string[]): string[] {
+  const out: string[] = [];
+  for (let i = 0; i < rest.length; i += 1) {
+    if (rest[i].startsWith("--")) {
+      if (VALUE_FLAGS.has(rest[i])) i += 1;
+      continue;
+    }
+    out.push(rest[i]);
+  }
+  return out;
 }
 
 function csv(value: string | undefined): string[] | undefined {

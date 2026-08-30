@@ -1,5 +1,5 @@
 {
-  "description": "Project memory hooks (merged into ~/.codex/hooks.json by install).",
+  "description": "Reference snapshot of the Codex hooks install writes into ~/.codex/hooks.json. install (dist/cli.js) builds this programmatically with absolute paths and does NOT read this file — edit the install code, not this copy.",
   "hooks": {
     "SessionStart": [
       {
@@ -7,7 +7,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node dist/cli.js hook",
+            "command": "node dist/cli.js hook --flavor codex",
+            "commandWindows": "node dist/cli.js hook --flavor codex",
             "statusMessage": "Loading project memory",
             "timeout": 5,
             "additionalContextLimit": 2500
@@ -20,7 +21,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node dist/cli.js hook",
+            "command": "node dist/cli.js hook --flavor codex",
+            "commandWindows": "node dist/cli.js hook --flavor codex",
             "statusMessage": "Project memory write reminder",
             "timeout": 5
           }

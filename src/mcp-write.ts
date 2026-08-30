@@ -32,15 +32,6 @@ export function normalizeWriteInput(input: WriteInput): WriteOk | WriteErr {
   return { ok: true, entry: { name, description, type: typeRaw, body, pin: input.pin } };
 }
 
-/** Instruction shown when a write conflicts: both stay, tell the owner, no winner. */
-export function conflictMessage(conflict: { keptSlug: string; newSlug: string }): string {
-  return [
-    `conflict: the new fact disagrees with existing "${conflict.keptSlug}".`,
-    `Both stay: kept "${conflict.keptSlug}" unchanged, wrote "${conflict.newSlug}".`,
-    `Tell the owner both slugs disagree and let them decide. Do not pick a winner, merge, or delete either.`,
-  ].join("\n");
-}
-
 function receivedKeys(input: WriteInput): string {
   const keys = Object.entries(input)
     .filter(([, value]) => value != null && String(value).trim() !== "")

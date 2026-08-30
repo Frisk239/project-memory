@@ -1,4 +1,6 @@
-# Auto-dream design — detect and prompt, human applies
+# Auto-dream design — historical detect-and-prompt design
+
+> Superseded by ADR-0006 for update/delete approval semantics. This document is historical context for why background auto-dream was rejected. Current policy: no background Dream job; when an active agent has sufficient evidence, it may update or delete ledger entries directly with `memory_write` / `memory_forget` without owner approval.
 
 > **Superseded by ADR-0005 (organize at write, no dream job).** The shipped product organizes at write and does not run a dream detection/prompt loop. `memory_dream` remains only as a manual CLI/MCP escape hatch. This document is kept for historical context; do not implement it.
 
@@ -11,23 +13,24 @@ The roadmap forbids one thing by name: **auto-dream that writes files with no co
 with a person."
 
 This design does **not** cross that line. Automation goes only as far as *detecting* that a dream
-is worth running and *telling* the user. Every file mutation still waits for `/memory-dream`
-(or an explicit `dream --apply`). Nothing writes behind the user's back.
+is worth running and *telling* the user. Background hooks still do not mutate files; an active
+agent may mutate files through ordinary `memory_write` / `memory_forget` when evidence is
+sufficient.
 
 So the split is:
 
-| | Automated (no confirmation) | Human-gated (unchanged) |
+| | Background automated | Active-agent judgment |
 |---|---|---|
-| Rebuild index, drop empty, merge identical | detected & offered | applied on `/memory-dream` |
-| Similar / conflict / stale / relative-date | detected & offered | resolved in-session by a person |
-| The actual git file write | never | always |
+| Rebuild index, drop empty, merge identical | detected & offered | applied on `/memory-dream apply` or `dream` |
+| Similar / legacy conflict / stale / relative-date | detected & offered | resolved in-session by the agent when evidence is sufficient |
+| Semantic file write/delete | never | allowed through `memory_write` / `memory_forget` |
 
-The full dream feature stays exactly as complete as it is today. We are adding a *doorbell*, not
+The full dream feature stays exactly as complete as it is today. This design was a doorbell, not
 an autopilot.
 
 ## Why bother, if it never auto-applies
 
-The one real cost of the current system: the user has to *remember* to run `/memory-dream`.
+The one real cost of the historical system: the user had to *remember* to run `/memory-dream`.
 Nobody does, so index drift and duplicates accumulate silently. A cheap, gated detector that
 surfaces "there are N safe fixes and M pairs to review, run `/memory-dream`" removes the
 "remember to" without touching the safety model. This is the same shape the roadmap already
@@ -57,8 +60,8 @@ Numbered inner-to-outer. Only layers 3 and 4 are new work.
 ### Layer 1 — Safe kernel (exists)
 
 Deterministic, lossless: rebuild index, drop empty, merge identical bodies, pin-protected.
-This is `applyDream({ dryRun: false })` today. It is the *only* layer allowed to mutate, and only
-when a human triggers it. No change.
+This is `applyDream({ dryRun: false })` today. It is the only background-safe mutation layer;
+semantic edits belong to the active agent through `memory_write` / `memory_forget`.
 
 ### Layer 2 — Concurrency gate (exists, one gap to close)
 
@@ -119,11 +122,11 @@ Constraints:
   cache in practice, fall back to a fixed sentence with no numbers — decide during implementation
   by checking whether the count actually varies session-to-session.)
 
-### Layer 5 — Human boundary (mostly exists)
+### Layer 5 — Agent judgment boundary (superseded wording)
 
 - **Safe ops:** offered, applied on `/memory-dream`. After an apply, `formatDreamReport` already
   says what changed.
-- **Semantic pairs:** stay `proposed`; resolved by a person in-session. Never auto-applied. No change.
+- **Semantic pairs:** stay `proposed`; resolved by the active agent in-session when evidence is sufficient. Never auto-applied by the deterministic dream pass.
 - **Noise control (small addition):** the suggestion must not nag. Because the gate re-checks
   `.last-dream` + change + a non-empty plan, an ignored suggestion keeps showing until the user
   either dreams or the ledger stops drifting — acceptable, but if it proves annoying, add a
@@ -138,7 +141,7 @@ Each defense maps to a layer, so we can point at where the guard lives.
 
 | Risk | Guard | Layer |
 |---|---|---|
-| Silently changed/deleted memory | never auto-apply; semantic merges human-only; pin protection | 1, 5 |
+| Silently changed/deleted memory | never background-auto-apply; semantic merges require active-agent judgment; pin protection | 1, 5 |
 | Blocking / slowing the turn | suggestion rides existing SessionStart inject; `planDream` is read-only; no sync dream | 3, 4 |
 | Concurrent write corrupts files | file lock + TTL; verify write path coverage | 2 |
 | Nagging | gate needs non-empty plan; optional snooze; opt-out | 3, 5 |

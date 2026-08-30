@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { conflictMessage, normalizeWriteInput } from "./mcp-write.js";
+import { normalizeWriteInput } from "./mcp-write.js";
 
 test("title and content aliases fill description and body", () => {
   const parsed = normalizeWriteInput({
@@ -49,12 +49,4 @@ test("missing body lists received keys", () => {
   if (parsed.ok) return;
   assert.match(parsed.error, /received: name, title, type/);
   assert.match(parsed.error, /missing: body \(or content\)/);
-});
-
-test("conflictMessage names both slugs and orders telling the owner without a winner", () => {
-  const text = conflictMessage({ keptSlug: "pkg-mgr", newSlug: "pkg-mgr-conflict" });
-  assert.match(text, /pkg-mgr/);
-  assert.match(text, /pkg-mgr-conflict/);
-  assert.match(text, /tell the owner/i);
-  assert.match(text, /do not pick a winner/i);
 });

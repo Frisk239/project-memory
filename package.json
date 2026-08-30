@@ -11,7 +11,7 @@
   "scripts": {
     "build": "tsc",
     "prepare": "tsc",
-    "test": "tsc && node --test dist/store.test.js dist/hooks.test.js dist/mcp-write.test.js dist/mcp.test.js dist/mcp-process.test.js dist/install.test.js dist/host-config.test.js dist/dream.test.js dist/paths.test.js dist/gitignore.test.js dist/kiro-agent.test.js dist/similarity.test.js",
+    "test": "tsc && cd dist && node --test",
     "start": "node dist/cli.js",
     "install-agents": "node dist/cli.js install"
   },

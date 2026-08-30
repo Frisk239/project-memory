@@ -13,6 +13,9 @@ import {
   removeProjectMemoryHookGroups,
   removeTomlTable,
   upsertHookGroup,
+  upsertMcpServer,
+  type McpRemoveStatus,
+  type McpUpsertStatus,
 } from "./core/host-config.js";
 import { patchKiroAgentFrontmatter, removeKiroAgentHooks, shouldPatchKiroAgent } from "./core/kiro-agent.js";
 
@@ -170,40 +173,69 @@ function runHookSelftest(cwd: string): { pass: boolean; detail: string } {
 export function installAgents(opts: { cwd?: string; agents: string[] }): string {
   const reports: string[] = [];
   const agents = opts.agents.map(normalizeAgent);
-  for (const agent of opts.agents) {
-    const name = normalizeAgent(agent);
-    if (name === "opencode") reports.push(installOpenCode());
-    else if (name === "zcode") reports.push(installZcode());
-    else if (name === "codex") reports.push(installCodex());
-    else if (name === "claude") reports.push(installClaude());
-    else if (name === "kiro") reports.push(installKiro(opts.cwd));
-    else if (name === "commandcode") reports.push(installCommandCode());
-    else if (name === "gemini") reports.push(installGemini());
-    else if (name === "grok") reports.push(installGrok());
-    else reports.push(`skip unknown agent: ${agent}`);
+  // One host failing (missing dir, malformed config) must not abort the rest:
+  // report the failure and keep installing the remaining agents.
+  for (const agent of agents) {
+    try {
+      reports.push(installAgent(agent, opts.cwd));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      reports.push(`${agent}: failed — ${message}`);
+    }
   }
-  reports.push(installSkill(agents));
+  try {
+    reports.push(installSkill(agents));
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    reports.push(`skill: failed — ${message}`);
+  }
   if (opts.cwd && isGitRepo(opts.cwd)) {
-    reports.push(`gitignore: .memory/ ${ensureGitignored(opts.cwd)}`);
+    try {
+      reports.push(`gitignore: .memory/ ${ensureGitignored(opts.cwd)}`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      reports.push(`gitignore: failed — ${message}`);
+    }
   }
   return reports.join("\n");
 }
 
 export function uninstallAgents(opts: { cwd?: string; agents: string[] }): string {
   const reports: string[] = [];
-  for (const agent of opts.agents) {
-    const name = normalizeAgent(agent);
-    if (name === "opencode") reports.push(uninstallOpenCode());
-    else if (name === "zcode") reports.push(uninstallZcode());
-    else if (name === "codex") reports.push(uninstallCodex());
-    else if (name === "claude") reports.push(uninstallClaude());
-    else if (name === "kiro") reports.push(uninstallKiro(opts.cwd));
-    else if (name === "commandcode") reports.push(uninstallCommandCode());
-    else if (name === "gemini") reports.push(uninstallGemini());
-    else if (name === "grok") reports.push(uninstallGrok());
-    else reports.push(`skip unknown agent: ${agent}`);
+  const agents = opts.agents.map(normalizeAgent);
+  for (const agent of agents) {
+    try {
+      reports.push(uninstallAgent(agent, opts.cwd));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      reports.push(`${agent}: failed — ${message}`);
+    }
   }
   return reports.join("\n");
+}
+
+function installAgent(agent: string, cwd?: string): string {
+  if (agent === "opencode") return installOpenCode();
+  if (agent === "zcode") return installZcode();
+  if (agent === "codex") return installCodex();
+  if (agent === "claude") return installClaude();
+  if (agent === "kiro") return installKiro(cwd);
+  if (agent === "commandcode") return installCommandCode();
+  if (agent === "gemini") return installGemini();
+  if (agent === "grok") return installGrok();
+  return `skip unknown agent: ${agent}`;
+}
+
+function uninstallAgent(agent: string, cwd?: string): string {
+  if (agent === "opencode") return uninstallOpenCode();
+  if (agent === "zcode") return uninstallZcode();
+  if (agent === "codex") return uninstallCodex();
+  if (agent === "claude") return uninstallClaude();
+  if (agent === "kiro") return uninstallKiro(cwd);
+  if (agent === "commandcode") return uninstallCommandCode();
+  if (agent === "gemini") return uninstallGemini();
+  if (agent === "grok") return uninstallGrok();
+  return `skip unknown agent: ${agent}`;
 }
 
 function normalizeAgent(agent: string): string {
@@ -212,33 +244,48 @@ function normalizeAgent(agent: string): string {
   return agent;
 }
 
+function upsertMcp(config: Record<string, unknown>, key: string, entry: Record<string, unknown>): McpUpsertStatus {
+  const servers = asObject(config[key]);
+  const status = upsertMcpServer(servers, entry, MCP);
+  if (status !== "kept") config[key] = servers;
+  return status;
+}
+
+function mcpStatusNote(status: McpUpsertStatus | undefined): string {
+  if (status === "kept") return "mcp kept (different project-memory entry — not overwritten)";
+  if (status === undefined) return "mcp config file missing";
+  return `mcp ${status}`;
+}
+
 function installOpenCode(): string {
+  const ocDir = join(homedir(), ".config", "opencode");
+  if (!existsSync(ocDir)) return "opencode: ~/.config/opencode missing, skipped";
   const source = openCodePluginSource();
-  const pluginDir = join(homedir(), ".config", "opencode", "plugins");
+  const pluginDir = join(ocDir, "plugins");
   mkdirSync(pluginDir, { recursive: true });
   writeFileSync(join(pluginDir, "project-memory.js"), source, "utf8");
-  const configPath = join(homedir(), ".config", "opencode", "opencode.json");
+  const configPath = join(ocDir, "opencode.json");
   const pluginHref = pathToFileUrl(join(pluginDir, "project-memory.js"));
+  let mcpStatus: McpUpsertStatus | undefined;
   mergeJson(configPath, (config) => {
-    const mcp = asObject(config.mcp);
-    mcp["project-memory"] = {
+    mcpStatus = upsertMcp(config, "mcp", {
       type: "local",
       enabled: true,
       command: ["node", MCP],
-    };
-    config.mcp = mcp;
+    });
     if (Array.isArray(config.plugin)) {
       const plugins = config.plugin.filter((item) => item !== pluginHref);
       if (plugins.length) config.plugin = plugins;
       else delete config.plugin;
     }
   });
-  return `opencode: plugin ${pluginHref} (auto-discovered) + mcp`;
+  return `opencode: plugin ${pluginHref} (auto-discovered) + ${mcpStatusNote(mcpStatus)}`;
 }
 
 function installZcode(): string {
   const configPath = join(homedir(), ".zcode", "cli", "config.json");
   if (!existsSync(configPath)) return "zcode: config.json missing, skipped";
+  let mcpStatus: McpUpsertStatus | undefined;
   mergeJson(configPath, (config) => {
     const hooks = asObject(config.hooks);
     hooks.enabled = true;
@@ -281,21 +328,21 @@ function installZcode(): string {
     hooks.events = events;
     config.hooks = hooks;
     const mcp = asObject(config.mcp);
-    const servers = asObject(mcp.servers);
-    servers["project-memory"] = {
+    mcpStatus = upsertMcp(mcp, "servers", {
       type: "stdio",
       command: "node",
       args: [MCP],
       enabled: true,
-    };
-    mcp.servers = servers;
+    });
     config.mcp = mcp;
   });
-  return `zcode: user hooks SessionStart/Stop/PreCompact + mcp`;
+  return `zcode: user hooks SessionStart/Stop/PreCompact + ${mcpStatusNote(mcpStatus)}`;
 }
 
 function installCodex(): string {
-  const hooksPath = join(homedir(), ".codex", "hooks.json");
+  const codexDir = join(homedir(), ".codex");
+  if (!existsSync(codexDir)) return "codex: ~/.codex missing, skipped";
+  const hooksPath = join(codexDir, "hooks.json");
   mergeJson(hooksPath, (config) => {
     const hooks = asObject(config.hooks);
     hooks.SessionStart = upsertHookGroup(hooks.SessionStart, {
@@ -340,14 +387,20 @@ function installSkill(agents: string[]): string {
   const skillSrc = join(ROOT, "skills", "project-memory", "SKILL.md");
   if (!existsSync(skillSrc)) return "skill: SKILL.md missing";
   const skillAgents = skillAgentsForInstall(agents);
-  const targets = [...skillAgents].map((agent) => skillPath(agent)).filter((path): path is string => !!path);
-  if (!targets.length) return "skill: no compatible skill target";
-  for (const target of targets) {
-    mkdirSync(dirname(target), { recursive: true });
-    copyFileSync(skillSrc, target);
+  const copied: string[] = [];
+  for (const agent of skillAgents) {
+    const target = skillTarget(agent);
+    if (!target) continue;
+    // A host whose config dir is absent gets no files: install must not
+    // create ~/.codex or friends for tools this machine does not have.
+    if (!existsSync(target.requiresDir)) continue;
+    mkdirSync(dirname(target.file), { recursive: true });
+    copyFileSync(skillSrc, target.file);
+    copied.push(agent);
   }
-  if (skillAgents.has("opencode")) installOpenCodeDreamCommand();
-  return `skill: copied to ${[...skillAgents].join(", ")}`;
+  if (!copied.length) return "skill: no installed host to copy to";
+  if (skillAgents.has("opencode") && copied.includes("opencode")) installOpenCodeDreamCommand();
+  return `skill: copied to ${copied.join(", ")}`;
 }
 
 function skillAgentsForInstall(agents: string[]): Set<string> {
@@ -371,6 +424,8 @@ function installOpenCodeDreamCommand(): void {
     dirs.push(join(process.env.APPDATA, "opencode", "commands"));
   }
   for (const dir of dirs) {
+    // Only drop the command file where an OpenCode install already exists.
+    if (!existsSync(dirname(dir))) continue;
     mkdirSync(dir, { recursive: true });
     copyFileSync(src, join(dir, "memory-dream.md"));
   }
@@ -403,10 +458,8 @@ function claudeStyleHooks(startMatcher: string): Record<string, unknown> {
   };
 }
 
-function mergeMcpStdio(config: Record<string, unknown>, key = "mcpServers"): void {
-  const servers = asObject(config[key]);
-  servers["project-memory"] = { command: "node", args: [MCP] };
-  config[key] = servers;
+function mergeMcpStdio(config: Record<string, unknown>, key = "mcpServers"): McpUpsertStatus {
+  return upsertMcp(config, key, { command: "node", args: [MCP] });
 }
 
 function installClaude(): string {
@@ -426,19 +479,27 @@ function installClaude(): string {
     config.hooks = hooks;
   });
   const claudeJson = join(homedir(), ".claude.json");
+  let mcpStatus: McpUpsertStatus | undefined;
   if (existsSync(claudeJson)) {
-    mergeJson(claudeJson, (config) => mergeMcpStdio(config));
+    mergeJson(claudeJson, (config) => {
+      mcpStatus = mergeMcpStdio(config);
+    });
   }
-  return "claude: settings.json SessionStart/Stop + ~/.claude.json mcp";
+  return `claude: settings.json SessionStart/Stop + ${mcpStatusNote(mcpStatus)}`;
 }
 
 function installKiro(workspace?: string): string {
+  const kiroDir = join(homedir(), ".kiro");
+  if (!existsSync(kiroDir)) return "kiro: ~/.kiro missing, skipped";
   const reports: string[] = [];
-  const mcpPath = join(homedir(), ".kiro", "settings", "mcp.json");
-  if (!existsSync(dirname(mcpPath))) reports.push("kiro: ~/.kiro missing, skipped (user-level mcp)");
+  const mcpPath = join(kiroDir, "settings", "mcp.json");
+  if (!existsSync(dirname(mcpPath))) reports.push("kiro: user-level mcp skipped (no ~/.kiro/settings)");
   else {
-    mergeJson(mcpPath, (config) => mergeMcpStdio(config));
-    reports.push("kiro: user-level mcp.json (no root pin — workspace entry carries it)");
+    let mcpStatus: McpUpsertStatus | undefined;
+    mergeJson(mcpPath, (config) => {
+      mcpStatus = mergeMcpStdio(config);
+    });
+    reports.push(`kiro: user-level ${mcpStatusNote(mcpStatus)} (no root pin — workspace entry carries it)`);
   }
   if (workspace) reports.push(installKiroWorkspaceMcp(workspace));
   const hookDir = join(homedir(), ".kiro", "hooks");
@@ -532,7 +593,10 @@ function patchKiroAgentFiles(): string[] {
 function installCommandCode(): string {
   const home = join(homedir(), ".commandcode");
   if (!existsSync(home)) return "commandcode: ~/.commandcode missing, skipped";
-  mergeJson(join(home, "mcp.json"), (config) => mergeMcpStdio(config));
+  let mcpStatus: McpUpsertStatus | undefined;
+  mergeJson(join(home, "mcp.json"), (config) => {
+    mcpStatus = mergeMcpStdio(config);
+  });
   mergeJson(join(home, "settings.json"), (config) => {
     const hooks = asObject(config.hooks);
     hooks.SessionStart = upsertHookGroup(hooks.SessionStart, {
@@ -544,13 +608,16 @@ function installCommandCode(): string {
     hooks.PostCompact = upsertHookGroup(hooks.PostCompact, { hooks: [hookCommand()] }, CLI);
     config.hooks = hooks;
   });
-  return "commandcode: mcp.json + settings.json SessionStart/Stop/PreCompact";
+  return `commandcode: ${mcpStatusNote(mcpStatus)} + settings.json SessionStart/Stop/PreCompact`;
 }
 
 function installGemini(): string {
   const gemini = join(homedir(), ".gemini");
   if (!existsSync(gemini)) return "gemini: ~/.gemini missing, skipped";
-  mergeJson(join(gemini, "config", "mcp_config.json"), (config) => mergeMcpStdio(config));
+  let mcpStatus: McpUpsertStatus | undefined;
+  mergeJson(join(gemini, "config", "mcp_config.json"), (config) => {
+    mcpStatus = mergeMcpStdio(config);
+  });
   mergeJson(join(gemini, "settings.json"), (config) => {
     const hooks = asObject(config.hooks);
     Object.assign(hooks, claudeStyleHooks("startup|resume|clear|compact"));
@@ -571,7 +638,7 @@ function installGemini(): string {
     )}\n`,
     "utf8",
   );
-  return "gemini/antigravity: mcp_config.json + PreInvocation/Stop hooks";
+  return `gemini/antigravity: ${mcpStatusNote(mcpStatus)} + PreInvocation/Stop hooks`;
 }
 
 function grokHookCommand(event: string): Record<string, unknown> {
@@ -630,14 +697,11 @@ function uninstallOpenCode(): string {
   }
   const removedFiles = [removeFile(pluginFile), ...commandFiles.map(removeFile), removeSkill("opencode")].filter(Boolean).length;
   const configPath = join(homedir(), ".config", "opencode", "opencode.json");
+  let mcpStatus: McpRemoveStatus = "absent";
   const configChanged = updateJson(configPath, (config) => {
     let changed = false;
-    const mcp = asObject(config.mcp);
-    if (Object.hasOwn(mcp, MARKER)) {
-      delete mcp[MARKER];
-      config.mcp = mcp;
-      changed = true;
-    }
+    mcpStatus = removeMcpServer(config, "mcp", MCP);
+    if (mcpStatus === "removed") changed = true;
     const pluginHref = pathToFileUrl(pluginFile);
     if (Array.isArray(config.plugin)) {
       const plugins = config.plugin.filter((item) => item !== pluginHref);
@@ -649,11 +713,13 @@ function uninstallOpenCode(): string {
     }
     return changed;
   });
-  return `opencode: ${removedFiles || configChanged ? "removed project-memory files/config" : "not installed"}`;
+  const summary = removedFiles || configChanged ? "removed project-memory files/config" : "not installed";
+  return `opencode: ${summary}${foreignMcpNote(mcpStatus)}`;
 }
 
 function uninstallZcode(): string {
   const configPath = join(homedir(), ".zcode", "cli", "config.json");
+  let mcpStatus: McpRemoveStatus = "absent";
   const configChanged = updateJson(configPath, (config) => {
     let changed = false;
     const hooks = asObject(config.hooks);
@@ -664,17 +730,16 @@ function uninstallZcode(): string {
       config.hooks = hooks;
     }
     const mcp = asObject(config.mcp);
-    const servers = asObject(mcp.servers);
-    if (Object.hasOwn(servers, MARKER)) {
-      delete servers[MARKER];
-      mcp.servers = servers;
+    mcpStatus = removeMcpServer(mcp, "servers", MCP);
+    if (mcpStatus === "removed") {
       config.mcp = mcp;
       changed = true;
     }
     return changed;
   });
   const skillRemoved = removeSkill("zcode");
-  return `zcode: ${configChanged || skillRemoved ? "removed hooks/mcp/skill" : "not installed"}`;
+  const summary = configChanged || skillRemoved ? "removed hooks/mcp/skill" : "not installed";
+  return `zcode: ${summary}${foreignMcpNote(mcpStatus)}`;
 }
 
 function uninstallCodex(): string {
@@ -698,18 +763,31 @@ function uninstallClaude(): string {
     if (changed) config.hooks = hooks;
     return changed;
   });
-  const mcpChanged = updateJson(join(homedir(), ".claude.json"), (config) => removeMcpServer(config));
+  let mcpStatus: McpRemoveStatus = "absent";
+  const mcpChanged = updateJson(join(homedir(), ".claude.json"), (config) => {
+    mcpStatus = removeMcpServer(config, "mcpServers", MCP);
+    return mcpStatus === "removed";
+  });
   const skillRemoved = removeSkill("claude");
-  return `claude: ${hooksChanged || mcpChanged || skillRemoved ? "removed hooks/mcp/skill" : "not installed"}`;
+  const summary = hooksChanged || mcpChanged || skillRemoved ? "removed hooks/mcp/skill" : "not installed";
+  return `claude: ${summary}${foreignMcpNote(mcpStatus)}`;
 }
 
 function uninstallKiro(workspace?: string): string {
   const reports: string[] = [];
-  const userMcp = updateJson(join(homedir(), ".kiro", "settings", "mcp.json"), (config) => removeMcpServer(config));
-  reports.push(`kiro user mcp: ${userMcp ? "removed" : "not installed"}`);
+  let userMcpStatus: McpRemoveStatus = "absent";
+  const userMcp = updateJson(join(homedir(), ".kiro", "settings", "mcp.json"), (config) => {
+    userMcpStatus = removeMcpServer(config, "mcpServers", MCP);
+    return userMcpStatus === "removed";
+  });
+  reports.push(`kiro user mcp: ${userMcp ? "removed" : removeStatusText(userMcpStatus)}`);
   if (workspace) {
-    const workspaceMcp = updateJson(join(resolve(workspace), ".kiro", "settings", "mcp.json"), (config) => removeMcpServer(config));
-    reports.push(`kiro workspace mcp: ${workspaceMcp ? "removed" : "not installed"}`);
+    let workspaceMcpStatus: McpRemoveStatus = "absent";
+    const workspaceMcp = updateJson(join(resolve(workspace), ".kiro", "settings", "mcp.json"), (config) => {
+      workspaceMcpStatus = removeMcpServer(config, "mcpServers", MCP);
+      return workspaceMcpStatus === "removed";
+    });
+    reports.push(`kiro workspace mcp: ${workspaceMcp ? "removed" : removeStatusText(workspaceMcpStatus)}`);
   }
   const hooksRemoved = removeFile(join(homedir(), ".kiro", "hooks", "project-memory.json"));
   const patched = unpatchKiroAgentFiles();
@@ -718,9 +796,23 @@ function uninstallKiro(workspace?: string): string {
   return reports.join("\n");
 }
 
+function removeStatusText(status: McpRemoveStatus): string {
+  if (status === "kept") return "left (different project-memory entry)";
+  return "not installed";
+}
+
+/** Report suffix when uninstall met a project-memory entry it did not own. */
+function foreignMcpNote(status: McpRemoveStatus): string {
+  return status === "kept" ? " (foreign project-memory mcp entry left in place)" : "";
+}
+
 function uninstallCommandCode(): string {
   const home = join(homedir(), ".commandcode");
-  const mcpChanged = updateJson(join(home, "mcp.json"), (config) => removeMcpServer(config));
+  let mcpStatus: McpRemoveStatus = "absent";
+  const mcpChanged = updateJson(join(home, "mcp.json"), (config) => {
+    mcpStatus = removeMcpServer(config, "mcpServers", MCP);
+    return mcpStatus === "removed";
+  });
   const hooksChanged = updateJson(join(home, "settings.json"), (config) => {
     const hooks = asObject(config.hooks);
     const changed = removeHookEvents(hooks, ["SessionStart", "Stop", "PreCompact", "PostCompact"]);
@@ -728,12 +820,17 @@ function uninstallCommandCode(): string {
     return changed;
   });
   const skillRemoved = removeSkill("commandcode");
-  return `commandcode: ${mcpChanged || hooksChanged || skillRemoved ? "removed hooks/mcp/skill" : "not installed"}`;
+  const summary = mcpChanged || hooksChanged || skillRemoved ? "removed hooks/mcp/skill" : "not installed";
+  return `commandcode: ${summary}${foreignMcpNote(mcpStatus)}`;
 }
 
 function uninstallGemini(): string {
   const gemini = join(homedir(), ".gemini");
-  const mcpChanged = updateJson(join(gemini, "config", "mcp_config.json"), (config) => removeMcpServer(config));
+  let mcpStatus: McpRemoveStatus = "absent";
+  const mcpChanged = updateJson(join(gemini, "config", "mcp_config.json"), (config) => {
+    mcpStatus = removeMcpServer(config, "mcpServers", MCP);
+    return mcpStatus === "removed";
+  });
   const settingsChanged = updateJson(join(gemini, "settings.json"), (config) => {
     const hooks = asObject(config.hooks);
     const changed = removeHookEvents(hooks, ["SessionStart", "Stop", "PreCompact", "PostCompact", "PreCompress"]);
@@ -746,7 +843,8 @@ function uninstallGemini(): string {
     return true;
   });
   const skillRemoved = removeSkill("gemini");
-  return `gemini/antigravity: ${mcpChanged || settingsChanged || hookFileChanged || skillRemoved ? "removed hooks/mcp/skill" : "not installed"}`;
+  const summary = mcpChanged || settingsChanged || hookFileChanged || skillRemoved ? "removed hooks/mcp/skill" : "not installed";
+  return `gemini/antigravity: ${summary}${foreignMcpNote(mcpStatus)}`;
 }
 
 function uninstallGrok(): string {
@@ -795,6 +893,23 @@ function removeTomlBlock(path: string, tableName: string): boolean {
 function removeSkill(agent: string): boolean {
   const file = skillPath(agent);
   return file ? removeFile(file) : false;
+}
+
+/** Where a skill copy lives, plus the host dir that must already exist to copy it. */
+function skillTarget(agent: string): { file: string; requiresDir: string } | undefined {
+  const file = skillPath(agent);
+  if (!file) return undefined;
+  const home = homedir();
+  let requiresDir = home;
+  if (agent === "opencode") requiresDir = join(home, ".config", "opencode");
+  else if (agent === "zcode") requiresDir = join(home, ".zcode");
+  else if (agent === "agents") requiresDir = join(home, ".codex"); // .agents rides along with codex only
+  else if (agent === "codex") requiresDir = join(home, ".codex");
+  else if (agent === "claude") requiresDir = join(home, ".claude");
+  else if (agent === "kiro") requiresDir = join(home, ".kiro");
+  else if (agent === "commandcode") requiresDir = join(home, ".commandcode");
+  else if (agent === "gemini") requiresDir = join(home, ".gemini");
+  return { file, requiresDir };
 }
 
 function skillPath(agent: string): string | undefined {

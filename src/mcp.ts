@@ -15,7 +15,7 @@ import {
   UnsafeMemoryEntryError,
 } from "./core/store.js";
 import { MEMORY_TYPES } from "./core/types.js";
-import { conflictMessage, normalizeWriteInput } from "./mcp-write.js";
+import { normalizeWriteInput } from "./mcp-write.js";
 
 /**
  * MCP clients may spawn us with no cwd; root resolution then falls back to the
@@ -38,7 +38,7 @@ type ToolResponse = { content: { type: "text"; text: string }[]; isError?: boole
  * without either its real ledger prefix or the explicit unresolved marker —
  * per-tool wrappers get forgotten; this one cannot. The body returns plain
  * text, or `{ text, isError: true }` for tool-level failures (not-found,
- * invalid input, conflict notices stay non-errors).
+ * invalid input, similar-topic refusals).
  */
 export function toolText(body: () => string | { text: string; isError: true }): ToolResponse {
   const previousDir = process.env.PROJECT_MEMORY_DIR;
@@ -98,7 +98,7 @@ export async function startMcp(): Promise<void> {
 
   server.tool(
     "memory_write",
-    "Create or update a durable project memory and refresh MEMORY.md. Types: user, feedback, project, reference.",
+    "Create or update a durable project memory and refresh MEMORY.md. Same slug replaces in place; new near-duplicate slugs are refused so the agent can reuse the existing slug or choose a distinct one.",
     {
       name: z.string().describe("Slug, kebab-case"),
       description: z.string().optional().describe("One-line summary for MEMORY.md. Alias: title"),
@@ -106,7 +106,7 @@ export async function startMcp(): Promise<void> {
       type: z.enum(MEMORY_TYPES).describe("user | feedback | project | reference"),
       body: z.string().optional().describe("Full text: fact, Why, How to apply. Alias: content"),
       content: z.string().optional().describe("Alias for body"),
-      pin: z.boolean().optional().describe("If true, dream will not auto-forget or merge this topic. A disagreeing write still creates a sibling; memory_forget still deletes."),
+      pin: z.boolean().optional().describe("If true, dream will not auto-forget or merge this topic. Explicit memory_write on the same slug and memory_forget can still update or delete it."),
     },
     async (args) =>
       toolText(() => {
@@ -114,9 +114,6 @@ export async function startMcp(): Promise<void> {
         if (!parsed.ok) return { text: withRoot(parsed.error), isError: true };
         try {
           const saved = saveEntry({ ...parsed.entry, origin: "mcp" });
-          if (saved.conflict) {
-            return withRoot(conflictMessage(saved.conflict));
-          }
           return withRoot(`wrote ${saved.name}\n- ${saved.name} — ${saved.description}`);
         } catch (error) {
           if (error instanceof SimilarTopicError) return { text: withRoot(error.message), isError: true };
@@ -127,7 +124,7 @@ export async function startMcp(): Promise<void> {
 
   server.tool(
     "memory_forget",
-    "Delete a memory topic and remove it from MEMORY.md.",
+    "Delete an obsolete, wrong, duplicate, or no-longer-useful memory topic and remove it from MEMORY.md.",
     { name: z.string().describe("Topic slug to delete") },
     async ({ name }) =>
       toolText(() => {
@@ -142,7 +139,7 @@ export async function startMcp(): Promise<void> {
 
   server.tool(
     "memory_dream",
-    "Consolidate .memory files: rebuild index, drop empty topics, merge identical bodies. Similar/conflict pairs are proposed only — never invented. dryRun defaults true.",
+    "Consolidate .memory files: rebuild index, drop empty topics, merge identical bodies. Semantic candidates are reported for agent judgment; dryRun defaults true.",
     {
       dryRun: z
         .boolean()

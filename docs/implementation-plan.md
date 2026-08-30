@@ -1,10 +1,10 @@
 # Implementation plan: ZCode-shaped extract (write-time organize)
 
-> **Superseded by `docs/tech-debt-and-roadmap.md` and the shipped implementation.** This file records the original slice plan only.
+> **Superseded by `docs/tech-debt-and-roadmap.md`, ADR-0006, and the shipped implementation.** This file records the original slice plan only. Do not dispatch it as current work; its conflict-sibling / owner-arbitration instructions are historical.
 
-Dispatch this document to a new session. Product decisions are locked. Do not reopen them. Do not add a Dream job, sidecar extract runtime, doorbell, or auto-apply LLM merge.
+Historical dispatch note: the product decisions below have since changed only in one narrow way: ledger updates/deletes are agent-maintained rather than owner-gated. Do not add a Dream job, sidecar extract runtime, doorbell, or background LLM merge.
 
-Normative language: `CONTEXT.md`, `docs/adr/0001`–`0005`. If this plan and an ADR disagree, the ADR wins.
+Normative language: `CONTEXT.md`, `docs/adr/0001`–`0006`. If this plan and an ADR disagree, the ADR wins.
 
 ## Locked shape
 
@@ -13,8 +13,8 @@ Personal, agent-facing ledger at `<project>/.memory/`. Default gitignore. Owner 
 | Piece | Behavior |
 |---|---|
 | **Extract** | After a successful round, the **main-session** consumer `memory_write`s durable facts. The owner does not have to say 记住. Stop / idle reminder. Not a sidecar model. |
-| **Organize** | Happens **at write**. Same slug upserts. Index (`MEMORY.md`) updates in `writeEntry`. Near-duplicates of a *new* slug are refused (`SimilarTopicError`). |
-| **Conflict** | New durable fact **disagrees** with an existing one → do **not** overwrite. **Both stay**. Same-session consumer **tells the owner**. Never pick a winner. |
+| **Organize** | Happens **at write**. Same slug replaces/upserts. Index (`MEMORY.md`) updates in `writeEntry`. Near-duplicates of a *new* slug are refused (`SimilarTopicError`). |
+| **Agent edits** | Updating and deleting memories are not owner-approval steps. When evidence is sufficient, the agent writes the corrected same slug or forgets obsolete duplicates. |
 | **Not this slice** | Gated Dream, per-turn consolidation LLM, ZCode `project_memory_extract` sidecar, team git wiki, Hermes loops, `/memory` UI, search snippets, slash-command expansion. |
 
 `memory_dream` stays as a **CLI/MCP escape hatch** (dry-run default). Do not mention it as the happy path in skill/inject copy. Do not auto-invoke it.
@@ -31,7 +31,7 @@ Primary hosts: **Kiro** and **OpenCode**. Other installed hosts keep existing ho
 
 ## Gap vs locked shape
 
-1. **Conflict is not implemented.** `SimilarTopicError` refuses a *new similar slug*. Same-slug write **silently overwrites**, including disagreeing bodies. That violates “both stay / tell the owner”.
+1. **Historical, superseded by ADR-0006.** `SimilarTopicError` refuses a *new similar slug*. Same-slug writes intentionally replace/upsert; that is now the desired agent-maintained ledger behavior.
 2. **Extract copy is still “when durable, you may write”.** Locked: you write without being asked, after a successful round. Skill still lists Dream as a primary flow and says “Never leave two entries that disagree.”
 3. **`.memory/` is not default-gitignored.** First write / install with `--cwd` must ensure the project `.gitignore` contains `.memory/`.
 4. **Kiro cwd-less MCP** must land (`rememberRoot`).
@@ -49,36 +49,14 @@ Already drafted: hook with a cwd stamps `rememberRoot`; MCP with no cwd falls ba
 
 **Done when:** `npm test` includes `paths.test.js`; Kiro MCP without cwd can read/write the last hooked project.
 
-### Slice B — Conflict at write
+### Slice B — Historical conflict-at-write design (superseded)
 
-**Files:** `src/core/similarity.ts` (reuse `BODY_SIMILAR`, `TITLE_OVERLAP`, `BODY_DIVERGE`), `src/core/store.ts`, `src/core/types.ts`, `src/mcp.ts`, `src/cli.ts`, `src/store.test.ts`
+Do not re-implement this historical conflict-sibling design. ADR-0006 replaced it with agent-maintained edits:
 
-**Rules for `saveEntry`:**
-
-| Incoming vs existing | Action |
-|---|---|
-| Same slug, bodies similar (`bodyScore >= BODY_SIMILAR`) or empty previous | Upsert (today). Keep `pin`. |
-| Same slug, bodies **diverge** (`bodyScore < BODY_DIVERGE`) | **Conflict.** Do not overwrite. Persist incoming under a new slug `{name}-conflict` (or `{name}-conflict-2` if taken). Mark both. Return a structured result, not a silent write. |
-| New slug, `isCloseTopic` and bodies similar | `SimilarTopicError` (today): tell writer to use the existing slug. |
-| New slug, title-overlap and bodies **diverge** | **Conflict.** Write the new slug (both stay). Mark both. |
-| New slug, not close | Create (today). |
-
-**Marking:** add optional frontmatter on both files, e.g. `conflict: other-slug`. Index line prefix so the next session sees it without opening the file, e.g. `[conflict: foo] description…`. Pin: a pinned topic is never overwritten on conflict; incoming still gets the sibling file.
-
-**MCP `memory_write`:** on conflict, `isError: false` (the write of the *new* file succeeded). Text must order the consumer to **tell the owner**, list both slugs, and **not pick a winner**. Distinct from `SimilarTopicError` (`isError: true`, “write that slug to update”).
-
-**CLI `write`:** print the same instruction to stdout; exit 0 on conflict (new file written). Exit non-zero only on similar-topic refuse with no write.
-
-**Tests (table-driven):**
-
-- upsert same slug, similar body
-- same slug, diverging body → old file bytes unchanged, new `*-conflict` file, both have `conflict:` frontmatter, index has two lines
-- new slug close+similar → `SimilarTopicError`, no new file
-- new slug title-overlap + diverging body → both files, marked
-- pin + diverging same slug → pin file unchanged, sibling created
-- MCP-shaped return string contains both slugs and “tell the owner”
-
-Do not implement a later Dream scan. Do not auto-merge agreeing similar *different* slugs (that is Dream). Similar new slug still errors so the agent retries with the real slug (ZCode upsert).
+- Same slug replaces/upserts in place, even when the body changes materially.
+- A new slug that is too close to an existing topic raises `SimilarTopicError`; the agent either writes the existing slug or chooses a clearly distinct slug.
+- Legacy `conflict:` frontmatter may still be parsed, rebuilt into the index, and cleaned by an agent with `memory_write` / `memory_forget`.
+- Pin protects only dream's automatic forget/merge, not explicit same-slug writes or explicit forget.
 
 ### Slice C — Default-ignore `.memory/`
 
@@ -100,7 +78,7 @@ Rewrite `WRITE_RULES` / `WRITE_REMINDER` / skill so they match Extract:
 - After a successful turn, if a durable fact appeared, `memory_write`. Do **not** wait for 记住 / remember.
 - Same topic → same slug (organize at write).
 - If `memory_write` returns similar-topic: retry **that** slug.
-- If it returns **conflict**: tell the owner both slugs; do not merge; do not delete.
+- If the index contains legacy **conflict** rows: read the related slugs, then update the canonical slug and forget obsolete siblings when evidence is sufficient.
 - Skip code, git, AGENTS.md, secrets. Empty ledger is fine.
 - Remove or bury the Dream section as “optional CLI `node dist/cli.js dream --dry-run`”, not a trigger table row.
 
@@ -114,7 +92,7 @@ Grok: still no Stop; skill + SessionStart/PreCompact only.
 
 **Files:** `README.md`, `docs/roadmap.md` (note Phase 2/3 Dream UI is **not** this work), skill (Slice D).
 
-README must say: project-local files, **gitignored by default**, shared by path not by git; extract after round in-session; organize at write; conflict tells the owner. Drop “plain files in the git repo” as the promise.
+README must say: project-local files, **gitignored by default**, shared by path not by git; extract after round in-session; organize at write; agent-maintained updates/deletes. Drop “plain files in the git repo” as the promise.
 
 Do not rewrite `docs/auto-dream-design.md` into the product. Leave it or add one line at the top: superseded by ADR-0005.
 
@@ -142,7 +120,7 @@ Manual (if hosts available):
 
 1. OpenCode: finish a turn with a durable fact, no 记住 → `memory_write` appears; `.memory/` exists; `.gitignore` has `.memory/`.
 2. Same slug update with similar wording → file replaced, one index line.
-3. Same slug with opposite fact → original file unchanged, `*-conflict` created, agent text tells you.
+3. Same slug with opposite fact → file replaced in place, one index line, no `*-conflict` sibling.
 4. Kiro: SessionStart injects index; Stop reminder; MCP write after a hook has stamped root.
 
 ## Dispatch prompt (paste into the other session)
@@ -150,7 +128,7 @@ Manual (if hosts available):
 ```
 Implement docs/implementation-plan.md in E:\code\project-memory.
 
-Product is locked in CONTEXT.md and docs/adr/0001–0005. Do not reopen: no Dream job, no sidecar extract, no doorbell. Organize at write. Conflict = both stay, tell the owner.
+Product is locked in CONTEXT.md and docs/adr/0001–0006. Do not reopen: no Dream job, no sidecar extract, no doorbell. Organize at write. Updates/deletes are agent-maintained; same slug replaces in place.
 
 Follow slices A→E in order. Land the uncommitted rememberRoot work first. npm test after each slice. Keep diffs scoped. Do not edit markdown the plan did not name except README/skill as in E/D.
 ```

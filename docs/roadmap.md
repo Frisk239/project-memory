@@ -1,6 +1,6 @@
 # Improvement roadmap
 
-> **Superseded by `docs/tech-debt-and-roadmap.md`, ADR-0001–0005, and the shipped implementation.** The shipped shape is a project-local, **gitignored-by-default** ledger shared **by path**, with **organize at write** and **conflict = both stay, tell the owner**. Extract happens in-session after a round (no sidecar). The Phase 2/3 `/memory` `/remember` UI, search snippets, supersede/audit trail, and any auto-dream loop below are **not** this work — treat them as ideas, not commitments. Where this doc says "in git", read "shared by path, gitignored by default".
+> **Superseded by `docs/tech-debt-and-roadmap.md`, ADR-0001–0006, and the shipped implementation.** The shipped shape is a project-local, **gitignored-by-default** ledger shared **by path**, with **organize at write** and **agent-maintained updates/deletes**. Extract happens in-session after a round (no sidecar). Conflict-sibling / owner-arbitration language below is historical and superseded by ADR-0006. The Phase 2/3 `/memory` `/remember` UI, search snippets, supersede/audit trail, and any auto-dream loop below are **not** this work — treat them as ideas, not commitments. Where this doc says "in git", read "shared by path, gitignored by default".
 
 Project-scoped development ledger, shared by path (gitignored by default). OpenCode and Kiro are the primary hosts.
 
@@ -18,7 +18,7 @@ Operating loop (keep):
 
 - **Write** — durable facts only: finished decision, constraint, shipped status, research finding, user said remember, or a correction. Same topic → same slug. Skip code structure, git history, AGENTS.md, one-off chatter.
 - **Read** — inject the index; `memory_read` a topic before acting on it. Do not auto-stuff full bodies into the turn.
-- **Dream** — human runs `/memory-dream`. Code applies safe ops only. Similar/conflict pairs are proposed, never auto-resolved. Dream mutates git, so it stays in the loop with a person.
+- **Dream** — optional `/memory-dream` escape hatch. Code applies deterministic safe ops only; semantic candidates are left for the active agent to resolve with `memory_write` / `memory_forget` when evidence is sufficient.
 
 ## Do not build
 
@@ -56,10 +56,10 @@ Worth copying, narrowly:
 
 | Source | Copy | Why it fits a git ledger |
 |---|---|---|
-| [jl-cmd/claude-dream](https://github.com/jl-cmd/claude-dream) | Audit → propose → confirm → execute → verify | Changing git files needs a report first |
+| [jl-cmd/claude-dream](https://github.com/jl-cmd/claude-dream) | Audit → propose → execute → verify | Semantic ledger edits need evidence first |
 | Claude dream (cheap rules only) | Relative dates → absolute; stale TODO/Next flagged | Notes expire; this is not personality synthesis |
 | [transportrefer/opencode-memory-plugin](https://github.com/transportrefer/opencode-memory-plugin) | Memory is advisory; repo + current instructions win; no secrets | Dev notes must not outrank the tree |
-| same | `/memory` `/remember`; if the agent writes, say what it saved | The human owns the ledger |
+| same | `/memory` `/remember`; if the agent writes, say what it saved | The agent-facing ledger should be visible, not chatty |
 | Engram `mem_suggest_topic_key` | On write, surface existing similar slugs | Cuts dupes without a background job |
 | Mem0 pin; optional supersede | Pin “this repo uses pnpm”; voided facts leave a trace | Auditable ledger, not Hermes `history.md` |
 | Engram progressive disclosure | Search returns a one-line snippet; full body via `memory_read` | Index stays thin |
@@ -71,9 +71,9 @@ Phase 1 (ledger hygiene) is in the tree.
 
 | Surface | Today |
 |---|---|
-| Store | `.memory/MEMORY.md` + one markdown file per slug, gitignored by default. `saveEntry` organizes at write: same slug upserts unless the body diverges, in which case it keeps both under a `*-conflict` sibling and flags both; a new slug close to an existing topic is refused. Conflict never picks a winner. |
+| Store | `.memory/MEMORY.md` + one markdown file per slug, gitignored by default. `saveEntry` organizes at write: same slug replaces/upserts; a new slug close to an existing topic is refused so the agent reuses the existing slug or picks a distinct name. Legacy conflict markers can still be read and cleaned. |
 | MCP / CLI | `memory_index` / `read` / `search` / `write` / `forget` / `list` / `dream`. Write accepts `pin`. |
-| Dream | Rebuild index, drop empty, merge identical bodies. Similar/conflict/stale TODO/relative dates → `proposed`. Pin is never forgotten or merged away. Apply takes `.memory/.dream.lock`. |
+| Dream | Rebuild index, drop empty, merge identical bodies. Similar/legacy-conflict/stale TODO/relative dates are reported for agent judgment. Pin is never forgotten or merged away by dream. Apply takes `.memory/.dream.lock`. |
 | OpenCode | Thin plugin injects index every model call; idle only logs; command `/memory-dream` |
 | Inject / skill | Recalled facts are snapshots; live repo and current instructions win; no secrets. Index text has no per-turn timestamps. |
 
@@ -118,7 +118,7 @@ Better commands and search. Plugin does not start learning.
    - `/memory` — show index
    - `/remember` — write (args = fact)
    - `/forget` — forget or supersede a slug
-   - Keep `/memory-dream` as confirm-then-apply (already: dry-run unless user passes `apply`)
+   - Keep `/memory-dream` as dry-run-by-default; `apply` runs deterministic safe ops, and semantic candidates are resolved by the agent through normal write/forget tools.
 
 2. **Search returns a snippet**
    - `memory_search` includes ~1 sentence of body, not only `name — description`.

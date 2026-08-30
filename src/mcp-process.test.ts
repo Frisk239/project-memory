@@ -144,16 +144,20 @@ test("spawned from project A with PROJECT_MEMORY_ROOT=B, every response and writ
     assert.ok(existsSync(join(projectB, ".memory", "subproc-explicit-root.md")));
     assert.ok(!existsSync(join(projectA, ".memory")), "must not create a ledger in the cwd project");
 
-    // Conflict response also leads with the ledger (batch-1 root echo).
-    const conflict = await call("memory_write", {
+    // Updating the same slug also leads with the ledger and replaces in place.
+    const updated = await call("memory_write", {
       name: "subproc-explicit-root",
       description: "spawned server must honor the explicit root",
       type: "project",
       body: "the release checklist was deleted entirely; releases now ship straight from the trunk",
     });
-    assert.ok(!conflict.isError, conflict.text);
-    assert.ok(firstLine(conflict.text).startsWith("[ledger: "), conflict.text);
-    assert.match(conflict.text, /conflict/);
+    assert.ok(!updated.isError, updated.text);
+    assert.equal(firstLine(updated.text), `[ledger: ${join(projectB, ".memory")}]`);
+    assert.ok(existsSync(join(projectB, ".memory", "subproc-explicit-root.md")));
+    assert.ok(!existsSync(join(projectB, ".memory", "subproc-explicit-root-conflict.md")));
+    const updatedRead = await call("memory_read", { name: "subproc-explicit-root" });
+    assert.match(updatedRead.text, /deleted entirely/);
+    assert.doesNotMatch(updatedRead.text, /signed by two reviewers/);
 
     // Error response leads with the ledger too.
     const missing = await call("memory_read", { name: "no-such-topic" });

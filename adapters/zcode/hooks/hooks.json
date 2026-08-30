@@ -1,5 +1,5 @@
 {
-  "description": "Project memory hooks",
+  "description": "Reference snapshot of the ZCode plugin-form hooks. install (dist/cli.js) writes user-level hooks into ~/.zcode/cli/config.json directly and does NOT read this file.",
   "hooks": {
     "SessionStart": [
       {

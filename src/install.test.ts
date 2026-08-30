@@ -159,6 +159,7 @@ test("codex uninstall removes both codex and agents skill copies", () => {
 test("uninstall removes current cli hook groups but preserves external project-memory text", () => {
   const home = isolateHome();
   const cli = fileURLToPath(new URL("./cli.js", import.meta.url));
+  const mcp = fileURLToPath(new URL("./mcp.js", import.meta.url));
   mkdirSync(join(home, ".claude"), { recursive: true });
   writeFileSync(
     join(home, ".claude", "settings.json"),
@@ -178,7 +179,7 @@ test("uninstall removes current cli hook groups but preserves external project-m
   );
   writeFileSync(
     join(home, ".claude.json"),
-    `${JSON.stringify({ mcpServers: { "project-memory": { command: "node" }, other: { command: "npx" } } }, null, 2)}\n`,
+    `${JSON.stringify({ mcpServers: { "project-memory": { command: "node", args: [mcp] }, other: { command: "npx" } } }, null, 2)}\n`,
     "utf8",
   );
   uninstallAgents({ agents: ["claude"] });
@@ -189,6 +190,67 @@ test("uninstall removes current cli hook groups but preserves external project-m
   assert.match(JSON.stringify(settings.hooks.Stop[0]), /project-memory-report/);
   const claude = JSON.parse(readFileSync(join(home, ".claude.json"), "utf8")) as { mcpServers: Record<string, unknown> };
   assert.deepEqual(Object.keys(claude.mcpServers), ["other"]);
+});
+
+test("uninstall leaves a foreign project-memory mcp entry in place", () => {
+  const home = isolateHome();
+  mkdirSync(join(home, ".claude"), { recursive: true });
+  writeFileSync(
+    join(home, ".claude.json"),
+    `${JSON.stringify({ mcpServers: { "project-memory": { command: "node", args: ["C:\\elsewhere\\mcp.js"] } } }, null, 2)}\n`,
+    "utf8",
+  );
+  const report = uninstallAgents({ agents: ["claude"] });
+  const claude = JSON.parse(readFileSync(join(home, ".claude.json"), "utf8")) as { mcpServers: Record<string, unknown> };
+  // The entry does not reference our mcp.js, so it is not ours to delete.
+  assert.ok(claude.mcpServers["project-memory"], "foreign entry must survive uninstall");
+  assert.match(report, /foreign project-memory mcp entry/);
+});
+
+test("install refuses to overwrite a foreign project-memory mcp entry", () => {
+  const home = isolateHome();
+  mkdirSync(join(home, ".claude"), { recursive: true });
+  writeFileSync(
+    join(home, ".claude.json"),
+    `${JSON.stringify({ mcpServers: { "project-memory": { command: "node", args: ["C:\\elsewhere\\mcp.js"] } } }, null, 2)}\n`,
+    "utf8",
+  );
+  const report = installAgents({ agents: ["claude"] });
+  const claude = JSON.parse(readFileSync(join(home, ".claude.json"), "utf8")) as {
+    mcpServers: Record<string, { args?: string[] }>;
+  };
+  assert.deepEqual(claude.mcpServers["project-memory"].args, ["C:\\elsewhere\\mcp.js"], "foreign entry must not be clobbered");
+  assert.match(report, /mcp kept/);
+});
+
+test("opencode install skips when ~/.config/opencode is missing and creates nothing", () => {
+  const home = isolateHome();
+  const report = installAgents({ agents: ["opencode"] });
+  assert.match(report, /opencode: .*missing, skipped/);
+  assert.ok(!existsSync(join(home, ".config")), "must not create ~/.config/opencode");
+  assert.ok(!existsSync(join(home, ".config", "opencode", "plugins")), "no plugin for a missing host");
+});
+
+test("codex install skips cleanly when ~/.codex is missing and creates nothing", () => {
+  const home = isolateHome();
+  const report = installAgents({ agents: ["codex"] });
+  assert.match(report, /codex: .*missing, skipped/);
+  assert.ok(!existsSync(join(home, ".codex")), "must not create ~/.codex");
+  assert.ok(!existsSync(join(home, ".agents")), "must not create ~/.agents for a missing host");
+  assert.ok(!existsSync(join(home, ".claude")), "other agents must not be dragged in");
+});
+
+test("one failing agent does not block the remaining agents", () => {
+  const home = isolateHome();
+  // ~/.claude exists but settings.json is unparseable: claude install throws.
+  mkdirSync(join(home, ".claude"), { recursive: true });
+  writeFileSync(join(home, ".claude", "settings.json"), "{not json at all", "utf8");
+  // ~/.grok exists (host present) so its install can proceed.
+  mkdirSync(join(home, ".grok"), { recursive: true });
+  const report = installAgents({ agents: ["claude", "grok"] });
+  assert.match(report, /claude: failed —/);
+  assert.match(report, /grok: hooks\/project-memory\.json/, "grok must still install after claude failed");
+  assert.ok(existsSync(join(home, ".grok", "hooks", "project-memory.json")));
 });
 
 test("doctor selftest runs the built hook against the requested root", () => {

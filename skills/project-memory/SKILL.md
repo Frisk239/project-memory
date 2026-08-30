@@ -5,7 +5,7 @@ description: Shared project memory. Use after finishing a non-trivial task, afte
 
 Extract, don't wait to be told. After a successful round, if a durable fact appeared, `memory_write` it — you do not need the owner to say 记住. Write when the next session would otherwise redo the work. Empty `.memory` is normal. Do not spam. Existing files are not a cap. A new valuable topic **may** get a new file. Same slug only for the same topic or a correction.
 
-Organize happens at write. Same slug upserts. A new slug too close to an existing topic is refused (`similar-topic`) — retry with the existing slug.
+Organize happens at write. Same slug replaces/upserts. A new slug too close to an existing topic is refused (`similar-topic`) — retry with the existing slug if it is the same topic, or choose a clearly distinct slug.
 
 Recalled facts are snapshots. The live repo and the current user instructions win if they disagree. Never store secrets, credentials, or tokens.
 
@@ -23,14 +23,16 @@ Recalled facts are snapshots. The live repo and the current user instructions wi
 
 Do not wait until a fact is "stable across many sessions". Multi-source research and non-obvious task context are worth keeping now.
 
-## Conflict: both stay, tell the owner
+## Agent edits
 
-`memory_write` organizes at write. Two outcomes need handling:
+This ledger is agent-facing. Updating and deleting memories are not owner-approval steps.
 
-- **similar-topic** (a *new* slug that is too close to an existing one): retry with the existing slug so it upserts.
-- **conflict** (the new fact **disagrees** with an existing one): the write still succeeded — both entries stay on disk, flagged `[conflict: …]` in the index. **Tell the owner both slugs and let them decide.** Do not merge, delete, or pick a winner. That is the owner's call, not yours.
+- If repo evidence or current user instructions make a memory stale, wrong, or incomplete, `memory_write` the same slug with the corrected body.
+- If a memory is obsolete, duplicate, or harmful to future sessions, `memory_forget` it.
+- If `memory_write` returns **similar-topic** for a new slug, read the candidate if needed, then either write the existing slug or pick a more distinct slug.
+- If the index contains legacy `[conflict: …]` rows, read both topics and resolve them yourself when the evidence is sufficient: write the canonical slug, then forget the obsolete sibling. Ask only when evidence is insufficient, not merely because the edit is a memory edit.
 
-An extension of the same fact upserts; a disagreeing rewrite keeps both and tells the owner.
+Do not invent facts while editing. The live repo and current user instructions still win over recalled memories.
 
 ## Correct
 
@@ -67,6 +69,6 @@ Body: the fact, **Why**, **How to apply**.
 
 `memory_write` args: `name` (slug), `description` (one-line summary; `title` also ok), `type` (`user` | `feedback` | `project` | `reference`), `body` (full text; `content` also ok). Confirm the returned index line. `memory_read` a topic slug from the index — not `MEMORY.md`.
 
-## Consolidation (optional, owner-run)
+## Consolidation (optional)
 
-Organize already happens at write, so you rarely need this. `memory_dream` (CLI: `node dist/cli.js dream --dry-run` from the project-memory checkout) is an escape hatch for manual housekeeping — rebuild index, drop empty topics, merge identical bodies. It is not part of the normal loop; do not auto-invoke it. Pinned topics (`pin: true`) are never touched.
+Organize already happens at write, so you rarely need this. `memory_dream` (CLI: `node dist/cli.js dream --dry-run` from the project-memory checkout) is an escape hatch for housekeeping — rebuild index, drop empty topics, merge identical bodies, and report semantic candidates for agent judgment. It is not part of the normal loop; do not auto-invoke it. Pinned topics (`pin: true`) are protected from dream's automatic forget/merge, but explicit `memory_write` on the same slug or `memory_forget` may still update/delete them when justified.
