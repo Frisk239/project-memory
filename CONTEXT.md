@@ -25,9 +25,13 @@ After each successful round, the main-session consumer writes durable facts with
 _Avoid_: transcript dump, idle learning loop, skill evolution, sidecar extract runtime, per-turn dream
 
 **Organize**:
-Happens at write, not as a later job. The writer reads the index, updates the matching slug, and refreshes `MEMORY.md`. Near-duplicates are refused. There is no Dream product surface.
+Happens at write, not as a later job. The writer reads the index, updates the matching slug (same slug replaces in place), and refreshes `MEMORY.md`. New slugs too close to an existing topic are refused. There is no Dream product surface.
 _Avoid_: dream, consolidation pass, gated housekeeping LLM
 
-**Conflict**:
-A new durable fact that disagrees with an existing one. Write does not overwrite. Both stay; the same-session consumer tells the owner. It must not pick a winner.
-_Avoid_: merge, overwrite, delete-the-loser, later dream scan
+**Agent edit**:
+An update or delete of an existing memory by the active agent. Not an owner-approval boundary (ADR 0006): when repo evidence, current user instructions, or newer ledger entries make a memory stale, wrong, incomplete, or duplicate, the agent rewrites the same slug or forgets it. Ask the owner only when the evidence is insufficient.
+_Avoid_: approval gate, change request, human-in-the-loop edit
+
+**Conflict marker**:
+A legacy `[conflict: …]` flag from older ledgers that kept disagreeing writes side by side. New writes no longer create conflict siblings. The agent resolves a marker by reading both slugs, writing the surviving fact to the surviving slug, and forgetting the obsolete one.
+_Avoid_: both-stay-forever, owner arbitration as the default, new conflict siblings on disagreement
