@@ -1,5 +1,5 @@
-import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { homedir } from "node:os";
 import { ensureGitignored, isGitRepo } from "./core/gitignore.js";
@@ -60,7 +60,7 @@ export function installAgents(opts: { cwd?: string; agents: string[] }): string 
     else if (name === "zcode") reports.push(installZcode());
     else if (name === "codex") reports.push(installCodex());
     else if (name === "claude") reports.push(installClaude());
-    else if (name === "kiro") reports.push(installKiro());
+    else if (name === "kiro") reports.push(installKiro(opts.cwd));
     else if (name === "commandcode") reports.push(installCommandCode());
     else if (name === "gemini") reports.push(installGemini());
     else if (name === "grok") reports.push(installGrok());
@@ -310,10 +310,15 @@ function installClaude(): string {
   return "claude: settings.json SessionStart/Stop + ~/.claude.json mcp";
 }
 
-function installKiro(): string {
+function installKiro(workspace?: string): string {
+  const reports: string[] = [];
   const mcpPath = join(homedir(), ".kiro", "settings", "mcp.json");
-  if (!existsSync(dirname(mcpPath))) return "kiro: ~/.kiro missing, skipped";
-  mergeJson(mcpPath, (config) => mergeMcpStdio(config));
+  if (!existsSync(dirname(mcpPath))) reports.push("kiro: ~/.kiro missing, skipped (user-level mcp)");
+  else {
+    mergeJson(mcpPath, (config) => mergeMcpStdio(config));
+    reports.push("kiro: user-level mcp.json (no root pin — workspace entry carries it)");
+  }
+  if (workspace) reports.push(installKiroWorkspaceMcp(workspace));
   const hookDir = join(homedir(), ".kiro", "hooks");
   mkdirSync(hookDir, { recursive: true });
   writeFileSync(
@@ -333,7 +338,55 @@ function installKiro(): string {
     "utf8",
   );
   const patched = patchKiroAgentFiles();
-  return `kiro: mcp.json + user hooks + agent files (${patched.join(", ") || "none"})`;
+  reports.push(`kiro: user hooks + agent files (${patched.join(", ") || "none"})`);
+  return reports.join("\n");
+}
+
+/**
+ * Workspace-level MCP entry for Kiro: `<workspace>/.kiro/settings/mcp.json`
+ * outranks the user-level entry and pins env.PROJECT_MEMORY_ROOT, so the
+ * server stops guessing the project from a cwd it was never given. Merges
+ * with whatever the workspace already has; refuses to overwrite a
+ * project-memory entry it did not write.
+ */
+export function installKiroWorkspaceMcp(workspace: string): string {
+  const root = resolve(workspace);
+  if (!isDirectory(root)) return `kiro workspace: not a directory, skipped (${root})`;
+  const entry = { command: "node", args: [MCP], env: { PROJECT_MEMORY_ROOT: root } };
+  const mcpPath = join(root, ".kiro", "settings", "mcp.json");
+  const existing = readJsonIfExists(mcpPath);
+  if (existing) {
+    const mine = asObject(asObject(existing.mcpServers)["project-memory"]);
+    if (Object.keys(mine).length && JSON.stringify(mine) !== JSON.stringify(entry)) {
+      return `kiro workspace: ${mcpPath} already defines project-memory differently — not overwritten`;
+    }
+  }
+  mkdirSync(dirname(mcpPath), { recursive: true });
+  mergeJson(mcpPath, (config) => {
+    const servers = asObject(config.mcpServers);
+    servers["project-memory"] = entry;
+    config.mcpServers = servers;
+  });
+  return `kiro workspace: ${mcpPath} (env PROJECT_MEMORY_ROOT=${root})`;
+}
+
+function isDirectory(path: string): boolean {
+  try {
+    return statSync(path).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+function readJsonIfExists(path: string): Record<string, unknown> | undefined {
+  if (!existsSync(path)) return undefined;
+  const raw = readFileSync(path, "utf8").trim();
+  if (!raw) return {};
+  const parsed: unknown = JSON.parse(raw);
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error(`cannot read non-object json: ${path}`);
+  }
+  return parsed as Record<string, unknown>;
 }
 
 function patchKiroAgentFiles(): string[] {

@@ -2,40 +2,79 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import { applyDream, DreamLockError, formatDreamReport } from "./core/dream.js";
+import { memoryDir, UnresolvedRootError } from "./core/paths.js";
 import { forgetEntry, listIndex, readEntry, readIndexText, saveEntry, searchEntries, SimilarTopicError } from "./core/store.js";
 import { MEMORY_TYPES } from "./core/types.js";
 import { conflictMessage, normalizeWriteInput } from "./mcp-write.js";
 
+/**
+ * MCP clients may spawn us with no cwd; root resolution then falls back to the
+ * single-slot last-root cache. Leading every response with the ledger path the
+ * tool actually resolved to makes a misdirected read or write visible on the
+ * spot instead of silently wrong.
+ */
+export function withRoot(text: string): string {
+  return `[ledger: ${memoryDir()}]\n${text}`;
+}
+
+/** Root-echo for responses where resolution failed: an unknown ledger, stated
+ * plainly, beats stamping a plausible-but-wrong path. */
+export const UNRESOLVED_LEDGER = "[ledger: unresolved]";
+
+type ToolResponse = { content: { type: "text"; text: string }[]; isError?: boolean };
+
+/**
+ * Every tool body runs through this guard, so a response can never leave
+ * without either its real ledger prefix or the explicit unresolved marker —
+ * per-tool wrappers get forgotten; this one cannot. The body returns plain
+ * text, or `{ text, isError: true }` for tool-level failures (not-found,
+ * invalid input, conflict notices stay non-errors).
+ */
+export function toolText(body: () => string | { text: string; isError: true }): ToolResponse {
+  try {
+    const result = body();
+    if (typeof result === "string") return { content: [{ type: "text" as const, text: result }] };
+    return { content: [{ type: "text" as const, text: result.text }], isError: true };
+  } catch (error) {
+    if (error instanceof UnresolvedRootError) {
+      return { content: [{ type: "text" as const, text: `${UNRESOLVED_LEDGER}\n${error.message}` }], isError: true };
+    }
+    throw error;
+  }
+}
+
+export function memoryIndexText(): string {
+  return withRoot(readIndexText() || "(empty)");
+}
+
 export async function startMcp(): Promise<void> {
   const server = new McpServer({ name: "project-memory", version: "0.1.0" });
 
-  server.tool("memory_index", "List the project MEMORY.md index. Call at the start of non-trivial work.", {}, async () => {
-    const text = readIndexText() || "(empty)";
-    return { content: [{ type: "text" as const, text }] };
-  });
+  server.tool("memory_index", "List the project MEMORY.md index. Call at the start of non-trivial work.", {}, async () =>
+    toolText(() => memoryIndexText()),
+  );
 
   server.tool(
     "memory_read",
     "Read one memory topic file by name/slug.",
     { name: z.string().describe("Topic slug from the index, not MEMORY.md") },
-    async ({ name }) => {
-      const entry = readEntry(name);
-      if (!entry) return { content: [{ type: "text" as const, text: `memory not found: ${name}` }], isError: true };
-      return { content: [{ type: "text" as const, text: render(entry) }] };
-    },
+    async ({ name }) =>
+      toolText(() => {
+        const entry = readEntry(name);
+        if (!entry) return { text: withRoot(`memory not found: ${name}`), isError: true };
+        return withRoot(render(entry));
+      }),
   );
 
   server.tool(
     "memory_search",
     "Keyword search across memory titles and bodies.",
     { query: z.string().describe("Keyword to search in titles and bodies") },
-    async ({ query }) => {
-      const hits = searchEntries(query);
-      const text = hits.length
-        ? hits.map((hit) => `- ${hit.name} — ${hit.description}`).join("\n")
-        : "(no hits)";
-      return { content: [{ type: "text" as const, text }] };
-    },
+    async ({ query }) =>
+      toolText(() => {
+        const hits = searchEntries(query);
+        return withRoot(hits.length ? hits.map((hit) => `- ${hit.name} — ${hit.description}`).join("\n") : "(no hits)");
+      }),
   );
 
   server.tool(
@@ -50,38 +89,37 @@ export async function startMcp(): Promise<void> {
       content: z.string().optional().describe("Alias for body"),
       pin: z.boolean().optional().describe("If true, dream will not auto-forget or merge this topic. A disagreeing write still creates a sibling; memory_forget still deletes."),
     },
-    async (args) => {
-      const parsed = normalizeWriteInput(args);
-      if (!parsed.ok) return { content: [{ type: "text" as const, text: parsed.error }], isError: true };
-      try {
-        const saved = saveEntry({ ...parsed.entry, origin: "mcp" });
-        if (saved.conflict) {
-          return { content: [{ type: "text" as const, text: conflictMessage(saved.conflict) }] };
+    async (args) =>
+      toolText(() => {
+        const parsed = normalizeWriteInput(args);
+        if (!parsed.ok) return { text: withRoot(parsed.error), isError: true };
+        try {
+          const saved = saveEntry({ ...parsed.entry, origin: "mcp" });
+          if (saved.conflict) {
+            return withRoot(conflictMessage(saved.conflict));
+          }
+          return withRoot(`wrote ${saved.name}\n- ${saved.name} — ${saved.description}`);
+        } catch (error) {
+          if (error instanceof SimilarTopicError) return { text: withRoot(error.message), isError: true };
+          throw error;
         }
-        return { content: [{ type: "text" as const, text: `wrote ${saved.name}\n- ${saved.name} — ${saved.description}` }] };
-      } catch (error) {
-        if (error instanceof SimilarTopicError) {
-          return { content: [{ type: "text" as const, text: error.message }], isError: true };
-        }
-        throw error;
-      }
-    },
+      }),
   );
 
   server.tool(
     "memory_forget",
     "Delete a memory topic and remove it from MEMORY.md.",
     { name: z.string().describe("Topic slug to delete") },
-    async ({ name }) => {
-      const ok = forgetEntry(name);
-      return { content: [{ type: "text" as const, text: ok ? `forgot ${name}` : `memory not found: ${name}` }] };
-    },
+    async ({ name }) =>
+      toolText(() => {
+        const forgot = forgetEntry(name);
+        return forgot ? withRoot(`forgot ${name}`) : { text: withRoot(`memory not found: ${name}`), isError: true };
+      }),
   );
 
-  server.tool("memory_list", "Return memory slugs currently in the index.", {}, async () => {
-    const items = listIndex();
-    return { content: [{ type: "text" as const, text: JSON.stringify(items, null, 2) }] };
-  });
+  server.tool("memory_list", "Return memory slugs currently in the index.", {}, async () =>
+    toolText(() => withRoot(JSON.stringify(listIndex(), null, 2))),
+  );
 
   server.tool(
     "memory_dream",
@@ -92,24 +130,16 @@ export async function startMcp(): Promise<void> {
         .optional()
         .describe("If true (default), report only. If false, apply safe ops (index rebuild, empty delete, identical-body merge)."),
     },
-    async ({ dryRun }) => {
-      try {
-        const report = applyDream({ dryRun: dryRun !== false });
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: `${formatDreamReport(report)}\n\n${JSON.stringify(report, null, 2)}`,
-            },
-          ],
-        };
-      } catch (error) {
-        if (error instanceof DreamLockError) {
-          return { content: [{ type: "text" as const, text: error.message }], isError: true };
+    async ({ dryRun }) =>
+      toolText(() => {
+        try {
+          const report = applyDream({ dryRun: dryRun !== false });
+          return withRoot(`${formatDreamReport(report)}\n\n${JSON.stringify(report, null, 2)}`);
+        } catch (error) {
+          if (error instanceof DreamLockError) return withRoot(error.message);
+          throw error;
         }
-        throw error;
-      }
-    },
+      }),
   );
 
   const transport = new StdioServerTransport();

@@ -7,7 +7,7 @@ import { afterEach, test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { writeEntry } from "./core/store.js";
 import { sessionContext } from "./hooks/context.js";
-import { handleHook } from "./hooks/protocol.js";
+import { handleHook, readHookInput } from "./hooks/protocol.js";
 
 const cli = fileURLToPath(new URL("./cli.js", import.meta.url));
 
@@ -174,4 +174,19 @@ test("Antigravity PreInvocation injects ephemeralMessage each call", () => {
   const second = handleHook({ invocationNum: 1, conversationId: id, workspacePaths: [dir] });
   const again = (second as { injectSteps: { ephemeralMessage: string }[] }).injectSteps;
   assert.match(again[0].ephemeralMessage, /ag-topic/);
+});
+
+test("readHookInput treats a TTY stdin as empty payload without reading fd 0", () => {
+  let read = false;
+  const input = readHookInput({ isTTY: true }, () => {
+    read = true;
+    return "";
+  });
+  assert.deepEqual(input, {});
+  assert.equal(read, false);
+});
+
+test("readHookInput parses piped JSON and treats an empty pipe as {}", () => {
+  assert.deepEqual(readHookInput({ isTTY: false }, () => '{"hook_event_name":"Stop"}'), { hook_event_name: "Stop" });
+  assert.deepEqual(readHookInput({}, () => " \n"), {});
 });

@@ -5,7 +5,7 @@ import { forgetEntry, listIndex, readEntry, readIndexText, saveEntry, searchEntr
 import { isMemoryType, type MemoryType } from "./core/types.js";
 import { compactFlush, sessionContext } from "./hooks/context.js";
 import { conflictMessage } from "./mcp-write.js";
-import { handleHook, hookPlainText, resolveCwd, type HookInput } from "./hooks/protocol.js";
+import { handleHook, hookPlainText, readHookInput, resolveCwd } from "./hooks/protocol.js";
 import { rememberRoot } from "./core/paths.js";
 import { doctorAgents, installAgents } from "./install.js";
 
@@ -117,8 +117,7 @@ async function dispatch(cmd: string, rest: string[]): Promise<void> {
 function runHook(rest: string[]): void {
   const event = flag(rest, "--event");
   const flavor = flag(rest, "--flavor");
-  const raw = readFileSync(0, "utf8").trim();
-  const input = (raw ? JSON.parse(raw) : {}) as HookInput;
+  const input = readHookInput(process.stdin, () => readFileSync(0, "utf8"));
   if (event) input.hook_event_name = event;
   // Hook processes are spawned with the workspace as cwd, so stamp the root
   // for cwd-less clients (Kiro MCP) to recover later.

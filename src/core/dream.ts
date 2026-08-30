@@ -215,7 +215,9 @@ function acquireDreamLock(cwd?: string): () => void {
   if (existsSync(file) && !lockIsStale(file)) {
     throw new DreamLockError();
   }
-  mkdirSync(memoryDir(cwd), { recursive: true });
+  // The lock lives in the ledger: creating it is a write, so an unresolvable
+  // root must fail here, before the lock file lands in a guessed project.
+  mkdirSync(memoryDir(cwd, { forWrite: true }), { recursive: true });
   writeFileSync(file, `${JSON.stringify({ pid: process.pid, at: new Date().toISOString() })}\n`, "utf8");
   return () => {
     try {

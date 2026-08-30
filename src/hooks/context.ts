@@ -1,4 +1,4 @@
-import { memoryDir } from "../core/paths.js";
+import { memoryDir, UnresolvedRootError } from "../core/paths.js";
 import { readIndexText } from "../core/store.js";
 
 const WRITE_RULES = `After a successful round, if a durable fact appeared, memory_write it. You do not have to be told 记住 — extract it yourself. Durable = a decision, constraint, shipped status, standing preference, research/exploration finding, or external URL the next session would otherwise redo. Empty .memory is fine; do not spam.
@@ -15,8 +15,18 @@ const COMPACT_FLUSH = `Context is about to be compacted — chat detail will be 
 const POST_COMPACT = `Context was just compacted. Re-read the index below. If something durable survived only in the summary and is not a memory yet, memory_write it.`;
 
 export function sessionContext(cwd?: string): string {
-  const index = readIndexText(cwd).trim();
-  const dir = memoryDir(cwd);
+  let index: string;
+  let dir: string;
+  try {
+    index = readIndexText(cwd).trim();
+    dir = memoryDir(cwd);
+  } catch (error) {
+    // No reliable root (not a workspace, cache stale): inject nothing rather
+    // than another project's index. A hook must never crash the host; the
+    // explicit CLI/MCP paths surface this error instead.
+    if (error instanceof UnresolvedRootError) return "";
+    throw error;
+  }
   if (!index) {
     return `## Project memory
 No memories yet for this project (${dir}).

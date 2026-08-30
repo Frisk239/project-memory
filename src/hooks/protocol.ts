@@ -119,3 +119,14 @@ export function hookPlainText(output: Record<string, unknown> | null): string {
   if (steps?.[0]?.ephemeralMessage) return steps[0].ephemeralMessage;
   return "";
 }
+
+/**
+ * Hooks read one JSON payload from stdin. A TTY stdin carries no payload:
+ * answer {} instead of blocking on fd 0 — a blocked read holds the hook until
+ * the host times it out and the session silently loses its context injection.
+ */
+export function readHookInput(stdin: { isTTY?: boolean }, readAll: () => string): HookInput {
+  if (stdin.isTTY) return {};
+  const raw = readAll().trim();
+  return raw ? (JSON.parse(raw) as HookInput) : {};
+}

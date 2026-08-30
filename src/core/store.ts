@@ -56,7 +56,9 @@ export class SimilarTopicError extends Error {
 }
 
 export function writeEntry(entry: MemoryEntry, cwd?: string): MemoryEntry {
-  const dir = memoryDir(cwd);
+  // forWrite: a write must refuse an unresolvable root instead of falling
+  // back somewhere plausible. Reads inside this flow re-resolve identically.
+  const dir = memoryDir(cwd, { forWrite: true });
   const firstCreate = !existsSync(dir);
   mkdirSync(dir, { recursive: true });
   if (firstCreate) ensureLedgerIgnored(dir);
@@ -172,7 +174,9 @@ function ensureLedgerIgnored(memDir: string): void {
 }
 
 export function forgetEntry(name: string, cwd?: string): boolean {
-  const file = entryPath(name, cwd);
+  // Deleting is a write: refuse an unresolvable root rather than unlink in a
+  // guessed project.
+  const file = entryPath(name, cwd, { forWrite: true });
   if (!existsSync(file)) return false;
   const forgotten = slugify(name);
   unlinkSync(file);
@@ -215,7 +219,7 @@ function flagIndexConflict(name: string, conflictWith: string, cwd?: string): vo
 }
 
 function writeIndex(items: MemoryIndexItem[], cwd?: string): void {
-  mkdirSync(memoryDir(cwd), { recursive: true });
+  mkdirSync(memoryDir(cwd, { forWrite: true }), { recursive: true });
   const lines = ["# MEMORY.md", "", ...items.map(indexLine), ""];
   writeFileSync(indexPath(cwd), capIndex(lines.join("\n")), "utf8");
 }
