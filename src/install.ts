@@ -322,6 +322,7 @@ function installCodex(): string {
         },
       ],
     }, CLI);
+    removeHookEvents(hooks, ["PreCompact", "PostCompact"]);
     config.hooks = hooks;
   });
   const tomlPath = join(homedir(), ".codex", "config.toml");

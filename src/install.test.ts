@@ -109,15 +109,35 @@ test("a non-directory workspace is skipped, nothing written", () => {
 
 test("codex install uses codex hook flavor and avoids compact hooks", () => {
   const home = isolateHome();
+  const cli = fileURLToPath(new URL("./cli.js", import.meta.url));
   mkdirSync(join(home, ".codex"), { recursive: true });
   writeFileSync(join(home, ".codex", "config.toml"), "", "utf8");
+  writeFileSync(
+    join(home, ".codex", "hooks.json"),
+    `${JSON.stringify(
+      {
+        hooks: {
+          PreCompact: [
+            { hooks: [{ command: "workspace-memory compact", statusMessage: "external hook" }] },
+            { hooks: [{ command: `node "${cli}" hook`, statusMessage: "Flush project memory before compact" }] },
+          ],
+          PostCompact: [
+            { hooks: [{ command: `node "${cli}" hook`, statusMessage: "Reload project memory after compact" }] },
+          ],
+        },
+      },
+      null,
+      2,
+    )}\n`,
+    "utf8",
+  );
   installAgents({ agents: ["codex"] });
   const hooks = JSON.parse(readFileSync(join(home, ".codex", "hooks.json"), "utf8")) as {
     hooks: Record<string, unknown>;
   };
   assert.match(JSON.stringify(hooks.hooks.SessionStart), /--flavor codex/);
   assert.match(JSON.stringify(hooks.hooks.Stop), /--flavor codex/);
-  assert.equal(hooks.hooks.PreCompact, undefined);
+  assert.deepEqual(hooks.hooks.PreCompact, [{ hooks: [{ command: "workspace-memory compact", statusMessage: "external hook" }] }]);
   assert.equal(hooks.hooks.PostCompact, undefined);
   assert.ok(existsSync(join(home, ".codex", "skills", "project-memory", "SKILL.md")));
   assert.ok(existsSync(join(home, ".agents", "skills", "project-memory", "SKILL.md")));
