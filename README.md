@@ -43,7 +43,7 @@ Primary paths are Kiro and OpenCode. The other host adapters are best-effort loc
 | After install | Do this |
 |---|---|
 | OpenCode | Restart. Index is injected into the system prompt (not the chat UI). |
-| ZCode | New session. Settings → Hooks should show `project-memory`. |
+| ZCode | New session. ZCode hooks are **optional**: the recommended wiring is the native auto-memory mirror — run `node dist/cli.js sync` from this checkout once per project (see below). |
 | Codex | `/hooks` and trust the new commands. Codex uses `SessionStart` for context and one `Stop` continuation reminder for extraction. |
 | Grok | `/hooks` and trust the new commands. Grok does **not** use a Stop write-reminder: its Stop `additionalContext` continues the turn. |
 | Claude | New session. `/hooks` if you want to confirm. |
@@ -66,6 +66,7 @@ node dist/cli.js install --agents kiro --cwd E:\code\your-project
   - **Extract** after a successful round — durable facts only, organized at write. Claude/ZCode Stop and OpenCode idle say: if nothing durable, do nothing. Codex Stop blocks once with that reminder, then lets the turn end. OpenCode idle stays log-only. Grok omits Stop so the reminder cannot loop.
 - **Skill** `project-memory`: when to read / write / correct / delete, and what not to store
 - **`memory_dream`** stays as an optional CLI/MCP escape hatch (dry-run default) for housekeeping — not part of the normal loop
+- **`sync`** (optional, ZCode only): two-way mirror between the repo ledger and ZCode's native auto-memory for the same project — see `docs/adr/0007-zcode-memory-mirror.md`. Run `node dist/cli.js sync` at a session boundary (`--dry-run` to preview). The ledger stays canonical; pinned topics are push-only.
 
 ## Usage
 
@@ -97,9 +98,22 @@ node dist/cli.js search keyword
 node dist/cli.js forget slug
 node dist/cli.js dream --dry-run
 node dist/cli.js dream
+node dist/cli.js sync
 ```
 
 `dream` is an optional escape hatch: it rebuilds `MEMORY.md` from topic files, deletes empty entries, and merges **identical** bodies. Similar, stale, relative-date, or legacy conflict candidates are reported for agent judgment; the agent can then use `memory_write` / `memory_forget` directly when the evidence is sufficient. Organize already happens at write, so you rarely need this and nothing auto-invokes it.
+
+### ZCode memory mirror (optional)
+
+ZCode ships its own per-project auto-memory (`~/.zcode/cli/memories/projects/<project>-<hash>/memory/`) with the same schema lineage as this ledger. `node dist/cli.js sync` mirrors the repo ledger into it and back, so ZCode sessions see project memory natively without project-memory hooks:
+
+- The repo ledger (`.memory/`) is the **only source of truth**; the ZCode copy is a regenerated mirror, never a second master.
+- Sync is deterministic (no LLM, no background process): three-way reconcile against `.memory/.sync-zcode.json`. An edit beats an unchanged side, a true both-sides edit resolves by mtime, and a deletion propagates only when the other side did not edit since the last sync.
+- Pinned topics (`pin: true`) are push-only — a ZCode-side edit is repaired from the ledger, never pulled in.
+- First sync writes a `project-memory-ledger.md` pointer memory into the ZCode dir so future sessions (and later syncs) can find the ledger.
+- Grok's native memory is **not** mirrored: it is freeform headings that Grok's auto-dream rewrites with an LLM, so round-tripping would sync dream's rewrites, not the ledger. Keep it as an export target only.
+
+See `docs/adr/0007-zcode-memory-mirror.md` for the full decision.
 
 ## Uninstall
 

@@ -2,7 +2,7 @@
 
 盘点时间：2026-08-27。基线当时：`main` @ `7e31616`，`npm test` 70 passed。P0/P1/P2 优化批次已在后续提交落地；2026-08-30 审计修复批次后 `npm test` 120 passed。
 
-这份文档取代 `docs/roadmap.md` 的 Phase 2/3（那份已自标 superseded）和 `docs/implementation-plan.md`（Slice A–E 已全部落地）作为**当前唯一在跑的计划**。产品边界仍由 `CONTEXT.md` 与 ADR 0001–0006 锁定：不做 sidecar、不做 persona、不做向量库、不做 Dream 常规回路。下面每一条都在这个边界内，只补实现债，不扩产品面。
+这份文档取代 `docs/roadmap.md` 的 Phase 2/3（那份已自标 superseded）和 `docs/implementation-plan.md`（Slice A–E 已全部落地）作为**当前唯一在跑的计划**。产品边界仍由 `CONTEXT.md` 与 ADR 0001–0007 锁定：不做 sidecar、不做 persona、不做向量库、不做 Dream 常规回路。下面每一条都在这个边界内，只补实现债，不扩产品面。
 
 ## 现状快照
 
@@ -121,7 +121,7 @@ ledger 是中文为主，25KB 边界切在多字节序列中间就是乱码。�
 - **本地工具边界。** 已锁定为 `private: true` 且不发布；后续保持 README 只引用仓库内的 `node dist/cli.js`，不要重新引入 npm release 表面。
 - **worktree 语义。** 每个 checkout 保有独立、未进 Git 的 `.memory/` 是接受的设计，不视为项目身份分裂缺口；需要继承上下文时，由使用者把整个 `.memory/` 复制到目标 worktree。
 - **agent 自主维护 ledger。** ADR-0006 覆盖早期“冲突交 owner 裁决”口径：`.memory/` 是给 agent 读写的账本，更新/删除不是人审边界。证据足够时 agent 直接 `memory_write` 同 slug 或 `memory_forget`；证据不足才问。
-- **继续拒绝的东西（重申，别让它们回流）。** sidecar extract、auto-apply dream、`/memory` UI、search snippet、supersede 审计链、向量检索、写 AGENTS.md、把 store 挪出项目目录。ADR 0001–0006 已经付过决策成本了。
+- **继续拒绝的东西（重申，别让它们回流）。** sidecar extract、auto-apply dream、`/memory` UI、search snippet、supersede 审计链、向量检索、写 AGENTS.md、把 store 挪出项目目录。ADR 0001–0007 已经付过决策成本了。
 
 ---
 
@@ -142,6 +142,7 @@ ledger 是中文为主，25KB 边界切在多字节序列中间就是乱码。�
 2026-08-27 批次2 已落地（P0.2 + P0.3）：`PROJECT_MEMORY_ROOT` 仍最高优先；cwd 探测成功即刷新缓存（env 分支不 stamp，多项目互不污染）；`last-root.txt` 升级为 `{root, at}` JSON + 30 分钟 TTL（`ROOT_CACHE_TTL_MS`），过期/损坏/旧格式一律不可用，读不提示、写直接抛 `UnresolvedRootError`；MCP 七个工具统一过 `toolText` guard，root 未解析时返回 `[ledger: unresolved]` + isError；`install --agents kiro` 写 `<workspace>/.kiro/settings/mcp.json` 带 `env.PROJECT_MEMORY_ROOT`（合并保留其他 server，拒绝覆盖异已配置），本仓库已装并从无关 cwd 验证。88 测试全绿，含 dist 子进程级：从项目 A cwd + env=B 启动确认写入 B。行为变化：非 workspace 目录下 CLI 读命令现在显式报错（原来静默 empty/fallback cwd）；hook 注入在 root 未解析时注入空而非崩。
 2026-08-30 全面优化批次已落地：路径越界读取关闭；当时曾对否定/数值硬分歧产生 conflict（后由 ADR-0006 改为同 slug 覆盖 + agent 自主整理）；Kiro agent frontmatter 由替换改为保守合并；Codex hook 改为官方契约下的 SessionStart + Stop 一次 continuation；MCP/store 单次调用绑定 ledger dir；store 写锁 + atomic write；Unicode slug + 整行可见截断；secret/frontmatter guard；host-config 纯函数 + uninstall + doctor selftest/stale path；OpenCode 不再显式 plugin 双加载；CI Node 20/22 x Ubuntu/Windows；108 测试全绿。
 2026-08-30 ADR-0006 已落地：更新/删除记忆不再是 owner 审批边界；`saveEntry` 同 slug 直接覆盖/upsert，近似新 slug 仍以 `similar-topic` 拒绝以防重复，legacy conflict 标记保留可读并可由 agent 用 `memory_write` + `memory_forget` 清理。README、skill、hook 注入文案、OpenCode `/memory-dream` 指令、ADR/roadmap 已同步；`npm test` 120 passed。
+2026-08-30 ADR-0007 已落地（ZCode auto-memory 双向镜像）：`node dist/cli.js sync [--dry-run] [--zcode-dir <dir>]` 对 `.memory/`（真身）与 `~/.zcode/cli/memories/projects/<project>-<hash>/memory/`（镜像）做三方对账——快照 `.memory/.sync-zcode.json` 记录上次两侧内容 hash，编辑胜过未动、双边同改按 mtime 决胜、删除仅在对方未动时传播；pin 条目只出不进，镜像被改则由账本修复；账本→ZCode 剥离 `node_type/origin/pin/conflict`，ZCode→账本保留原 `origin/pin`；指针记忆 `project-memory-ledger` 锚定 repo→ZCode 目录映射并对 ZCode 会话可见。映射 hash 不可复算（实测 sha1/sha256/md5/blake2b 均不中），靠指针与唯一 basename 兜底。Grok 保持单向导出（freeform 标题格式 + LLM auto-dream 会改写内容，双向会同步 dream 的改写产物）。127 测试全绿；本仓库镜像已建立（push 4 / pull 2 / 幂等验证通过）。
 
 ---
 

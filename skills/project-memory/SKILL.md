@@ -72,3 +72,7 @@ Body: the fact, **Why**, **How to apply**.
 ## Consolidation (optional)
 
 Organize already happens at write, so you rarely need this. `memory_dream` (CLI: `node dist/cli.js dream --dry-run` from the project-memory checkout) is an escape hatch for housekeeping — rebuild index, drop empty topics, merge identical bodies, and report semantic candidates for agent judgment. It is not part of the normal loop; do not auto-invoke it. Pinned topics (`pin: true`) are protected from dream's automatic forget/merge, but explicit `memory_write` on the same slug or `memory_forget` may still update/delete them when justified.
+
+## ZCode mirror (optional)
+
+ZCode's native auto-memory for this project is a mirror of the repo ledger, not a second store. If the project uses the mirror (`node dist/cli.js sync` from the project-memory checkout, `--dry-run` to preview), run one sync at a session boundary after writing or forgetting memories. The ledger wins on pinned topics; everything else is last-writer-wins at sync time. Do not hand-edit the mirrored files in the ZCode memory dir expecting it to stick — the next sync repairs them from the ledger.

@@ -1,5 +1,6 @@
 #!/usr/bin/env node
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import { applyDream, formatDreamReport } from "./core/dream.js";
 import { forgetEntry, listIndex, readEntry, readIndexText, saveEntry, searchEntries } from "./core/store.js";
 import { isMemoryType, type MemoryType } from "./core/types.js";
@@ -7,6 +8,8 @@ import { compactFlush, sessionContext } from "./hooks/context.js";
 import { handleHook, hookPlainText, readHookInput, resolveCwd } from "./hooks/protocol.js";
 import { rememberRoot, probeFromCwd } from "./core/paths.js";
 import { DEFAULT_AGENTS, doctorAgents, installAgents, uninstallAgents } from "./install.js";
+import { formatSyncReport, resolveZcodeMemoryDir, syncZcodeMirror } from "./core/zcode-sync.js";
+import { memoryDir, resolveProjectRoot } from "./core/paths.js";
 
 // Declared before the top-level dispatch: module top-level code runs before
 // later declarations initialize, and positionalArgs reads this.
@@ -82,6 +85,11 @@ async function dispatch(cmd: string, rest: string[]): Promise<void> {
       print(formatDreamReport(applyDream({ cwd, dryRun })));
       return;
     }
+    case "sync": {
+      const dryRun = rest.includes("--dry-run");
+      print(syncZcode({ cwd, dryRun, zcodeDir: flag(rest, "--zcode-dir") }));
+      return;
+    }
     case "install":
       print(
         installAgents({
@@ -108,7 +116,7 @@ async function dispatch(cmd: string, rest: string[]): Promise<void> {
     }
     case "help":
     default:
-      print(`project-memory <hook|inject|index|read|write|search|forget|list|dream|install|uninstall|doctor|mcp>`);
+      print(`project-memory <hook|inject|index|read|write|search|forget|list|dream|sync|install|uninstall|doctor|mcp>`);
   }
 }
 
@@ -160,6 +168,16 @@ function positionalArgs(rest: string[]): string[] {
 function csv(value: string | undefined): string[] | undefined {
   if (!value) return undefined;
   return value.split(",").map((item) => item.trim()).filter(Boolean);
+}
+
+/** Resolve ledger + ZCode mirror dirs, run one sync pass, render the report. */
+function syncZcode(opts: { cwd: string; dryRun: boolean; zcodeDir?: string }): string {
+  const root = resolveProjectRoot(opts.cwd, { forWrite: true });
+  const ledgerDir = memoryDir(opts.cwd, { forWrite: true });
+  const snapshotPath = join(ledgerDir, ".sync-zcode.json");
+  const snapshot = existsSync(snapshotPath) ? JSON.parse(readFileSync(snapshotPath, "utf8")) : undefined;
+  const zcodeDir = resolveZcodeMemoryDir(root, { explicit: opts.zcodeDir, snapshot });
+  return formatSyncReport(syncZcodeMirror({ ledgerDir, zcodeDir, dryRun: opts.dryRun }));
 }
 
 function print(text: string): void {
