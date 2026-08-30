@@ -69,4 +69,4 @@ Body: the fact, **Why**, **How to apply**.
 
 ## Consolidation (optional, owner-run)
 
-Organize already happens at write, so you rarely need this. `memory_dream` (CLI: `project-memory dream --dry-run`) is an escape hatch for manual housekeeping — rebuild index, drop empty topics, merge identical bodies. It is not part of the normal loop; do not auto-invoke it. Pinned topics (`pin: true`) are never touched.
+Organize already happens at write, so you rarely need this. `memory_dream` (CLI: `node dist/cli.js dream --dry-run` from the project-memory checkout) is an escape hatch for manual housekeeping — rebuild index, drop empty topics, merge identical bodies. It is not part of the normal loop; do not auto-invoke it. Pinned topics (`pin: true`) are never touched.

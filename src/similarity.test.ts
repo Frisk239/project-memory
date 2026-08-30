@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { BODY_DIVERGE, BODY_SIMILAR, bodiesAgree, bodyScore, overlapScore, tokens } from "./core/similarity.js";
+import { BODY_DIVERGE, BODY_SIMILAR, bodiesAgree, bodyScore, hasHardDivergence, overlapScore, tokens } from "./core/similarity.js";
 
 const CN_LEDGER =
   "采用仓库内明文记忆，不写向量库，整理由人触发。空账本是正常状态。";
@@ -48,6 +48,14 @@ test("Chinese added sentence sits in Jaccard gray but overlap is containment", (
 test("latin extension agrees; opposite facts do not", () => {
   assert.equal(bodiesAgree(EN_A, `${EN_A} Also use pnpm for CI.`), true);
   assert.equal(bodiesAgree(EN_A, EN_B), false);
+});
+
+test("same-topic negation is a hard divergence even when token overlap is high", () => {
+  assert.equal(bodiesAgree("Use pnpm for installs in this repo.", "Do not use pnpm for installs in this repo."), false);
+  assert.equal(bodiesAgree("Production deploys are allowed.", "Production deploys are not allowed."), false);
+  assert.equal(bodiesAgree("数据库允许写入。", "数据库不允许写入。"), false);
+  assert.equal(hasHardDivergence("Use Node 20 for local runs.", "Use Node 22 for local runs."), true);
+  assert.equal(hasHardDivergence("Use Node 20 for local runs.", "Use Node 20 and 22 for local runs."), false);
 });
 
 test("empty previous agrees so a first write still upserts", () => {

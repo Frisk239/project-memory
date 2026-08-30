@@ -171,6 +171,8 @@ test("slugify keeps Han so two Chinese names do not collapse to memory", () => {
   assert.notEqual(slugify("发布方式"), "memory");
   assert.notEqual(slugify("调研结论"), "memory");
   assert.notEqual(slugify("发布方式"), slugify("调研结论"));
+  assert.equal(slugify("カナ 메모 память"), "カナ-메모-память");
+  assert.match(slugify("💾"), /^memory-[0-9a-f]{8}$/);
 });
 
 test("rememberRoot ignores a non-existent root", (t) => {

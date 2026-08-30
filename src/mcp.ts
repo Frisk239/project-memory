@@ -3,7 +3,17 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { z } from "zod";
 import { applyDream, DreamLockError, formatDreamReport } from "./core/dream.js";
 import { memoryDir, UnresolvedRootError } from "./core/paths.js";
-import { forgetEntry, listIndex, readEntry, readIndexText, saveEntry, searchEntries, SimilarTopicError } from "./core/store.js";
+import {
+  forgetEntry,
+  listIndex,
+  readEntry,
+  readIndexText,
+  saveEntry,
+  searchEntries,
+  SimilarTopicError,
+  StoreLockError,
+  UnsafeMemoryEntryError,
+} from "./core/store.js";
 import { MEMORY_TYPES } from "./core/types.js";
 import { conflictMessage, normalizeWriteInput } from "./mcp-write.js";
 
@@ -31,7 +41,10 @@ type ToolResponse = { content: { type: "text"; text: string }[]; isError?: boole
  * invalid input, conflict notices stay non-errors).
  */
 export function toolText(body: () => string | { text: string; isError: true }): ToolResponse {
+  const previousDir = process.env.PROJECT_MEMORY_DIR;
   try {
+    const ledgerDir = memoryDir();
+    process.env.PROJECT_MEMORY_DIR = ledgerDir;
     const result = body();
     if (typeof result === "string") return { content: [{ type: "text" as const, text: result }] };
     return { content: [{ type: "text" as const, text: result.text }], isError: true };
@@ -39,7 +52,13 @@ export function toolText(body: () => string | { text: string; isError: true }): 
     if (error instanceof UnresolvedRootError) {
       return { content: [{ type: "text" as const, text: `${UNRESOLVED_LEDGER}\n${error.message}` }], isError: true };
     }
+    if (error instanceof StoreLockError || error instanceof UnsafeMemoryEntryError) {
+      return { content: [{ type: "text" as const, text: withRoot(error.message) }], isError: true };
+    }
     throw error;
+  } finally {
+    if (previousDir === undefined) delete process.env.PROJECT_MEMORY_DIR;
+    else process.env.PROJECT_MEMORY_DIR = previousDir;
   }
 }
 

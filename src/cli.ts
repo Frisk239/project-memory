@@ -7,7 +7,7 @@ import { compactFlush, sessionContext } from "./hooks/context.js";
 import { conflictMessage } from "./mcp-write.js";
 import { handleHook, hookPlainText, readHookInput, resolveCwd } from "./hooks/protocol.js";
 import { rememberRoot } from "./core/paths.js";
-import { doctorAgents, installAgents } from "./install.js";
+import { DEFAULT_AGENTS, doctorAgents, installAgents, uninstallAgents } from "./install.js";
 
 const args = process.argv.slice(2);
 const command = args[0] ?? "help";
@@ -86,22 +86,20 @@ async function dispatch(cmd: string, rest: string[]): Promise<void> {
       print(
         installAgents({
           cwd,
-          agents:
-            csv(flag(rest, "--agents")) || [
-              "opencode",
-              "zcode",
-              "codex",
-              "claude",
-              "kiro",
-              "commandcode",
-              "gemini",
-              "grok",
-            ],
+          agents: csv(flag(rest, "--agents")) || DEFAULT_AGENTS,
+        }),
+      );
+      return;
+    case "uninstall":
+      print(
+        uninstallAgents({
+          cwd,
+          agents: csv(flag(rest, "--agents")) || DEFAULT_AGENTS,
         }),
       );
       return;
     case "doctor":
-      print(doctorAgents());
+      print(doctorAgents({ cwd, selftest: rest.includes("--selftest") }));
       return;
     case "mcp": {
       const { startMcp } = await import("./mcp.js");
@@ -110,7 +108,7 @@ async function dispatch(cmd: string, rest: string[]): Promise<void> {
     }
     case "help":
     default:
-      print(`project-memory <hook|inject|index|read|write|search|forget|list|dream|install|doctor|mcp>`);
+      print(`project-memory <hook|inject|index|read|write|search|forget|list|dream|install|uninstall|doctor|mcp>`);
   }
 }
 

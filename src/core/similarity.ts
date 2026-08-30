@@ -5,6 +5,29 @@ export const TITLE_OVERLAP = 0.55;
 export const BODY_DIVERGE = 0.35;
 
 const HAN = /\p{Script=Han}/u;
+const NEGATORS = new Set(["not", "no", "never", "without", "cannot", "cant", "wont", "dont"]);
+const AUXILIARY = new Set(["a", "an", "are", "be", "been", "being", "can", "do", "does", "did", "is", "must", "should", "the", "to", "will"]);
+const ACTION_WORDS = new Set([
+  "allow",
+  "allowed",
+  "delete",
+  "deleted",
+  "disable",
+  "disabled",
+  "enable",
+  "enabled",
+  "install",
+  "merge",
+  "publish",
+  "read",
+  "run",
+  "store",
+  "stored",
+  "use",
+  "write",
+  "written",
+]);
+const HAN_ACTIONS = ["允许", "需要", "可以", "必须", "应该", "启用", "使用", "写入", "删除", "读取", "发布", "覆盖", "合并", "存储", "保存", "提交", "运行"];
 
 /**
  * Latin words (len > 2) plus overlapping Han character bigrams.
@@ -71,10 +94,115 @@ export function bodiesAgree(prev: string, incoming: string): boolean {
   const prevTok = tokens(prev);
   if (prevTok.size === 0) return true;
   const nextTok = tokens(incoming);
+  if (hasHardDivergence(prev, incoming)) return false;
   const score = jaccard(prevTok, nextTok);
   if (score >= BODY_SIMILAR) return true;
   if (score < BODY_DIVERGE) return false;
   return overlapOf(prevTok, nextTok) >= BODY_SIMILAR;
+}
+
+export function hasHardDivergence(prev: string, incoming: string): boolean {
+  if (changedValues(prev, incoming)) return true;
+  const a = polarity(prev);
+  const b = polarity(incoming);
+  return intersects(a.negative, b.positive) || intersects(a.positive, b.negative);
+}
+
+function changedValues(prev: string, incoming: string): boolean {
+  const a = values(prev);
+  const b = values(incoming);
+  if (!a.size || !b.size) return false;
+  return !setEqual(a, b) && !isSubset(a, b) && !isSubset(b, a);
+}
+
+function values(text: string): Set<string> {
+  return new Set(text.toLowerCase().match(/\bv?\d+(?:\.\d+)*\b/g) ?? []);
+}
+
+function polarity(text: string): { positive: Set<string>; negative: Set<string> } {
+  const positive = new Set<string>();
+  const negative = new Set<string>();
+  addLatinPolarity(text, positive, negative);
+  addHanPolarity(text, positive, negative);
+  return { positive, negative };
+}
+
+function addLatinPolarity(text: string, positive: Set<string>, negative: Set<string>): void {
+  const words = text
+    .toLowerCase()
+    .replace(/\b(can|do|does|did|will|would|should|must)n['’]?t\b/g, "$1 not")
+    .match(/[a-z0-9]+/g) ?? [];
+  for (let i = 0; i < words.length; i += 1) {
+    const word = words[i];
+    if (!ACTION_WORDS.has(word)) continue;
+    const object = nearestObject(words, i);
+    const key = `${word}:${object}`;
+    if (isNegated(words, i)) negative.add(key);
+    else positive.add(key);
+  }
+}
+
+function nearestObject(words: string[], index: number): string {
+  for (let i = index + 1; i < Math.min(words.length, index + 5); i += 1) {
+    if (words[i].length > 2 && !AUXILIARY.has(words[i]) && !NEGATORS.has(words[i])) return words[i];
+  }
+  for (let i = index - 1; i >= Math.max(0, index - 5); i -= 1) {
+    if (words[i].length > 2 && !AUXILIARY.has(words[i]) && !NEGATORS.has(words[i])) return words[i];
+  }
+  return "*";
+}
+
+function isNegated(words: string[], index: number): boolean {
+  for (let i = Math.max(0, index - 3); i < index; i += 1) {
+    if (NEGATORS.has(words[i])) return true;
+  }
+  return false;
+}
+
+function addHanPolarity(text: string, positive: Set<string>, negative: Set<string>): void {
+  for (const action of HAN_ACTIONS) {
+    let start = 0;
+    while (true) {
+      const index = text.indexOf(action, start);
+      if (index === -1) break;
+      const object = nextHanAction(text, index + action.length) ?? previousHanToken(text, index) ?? "*";
+      const key = `${action}:${object}`;
+      if (hanNegated(text, index)) negative.add(key);
+      else positive.add(key);
+      start = index + action.length;
+    }
+  }
+}
+
+function hanNegated(text: string, index: number): boolean {
+  const before = text.slice(Math.max(0, index - 6), index);
+  return /(?:不|无|没|未|非|禁止|不要|不能|不可|拒绝)$/.test(before);
+}
+
+function nextHanAction(text: string, from: number): string | undefined {
+  const tail = text.slice(from, from + 8);
+  return HAN_ACTIONS.find((action) => tail.includes(action));
+}
+
+function previousHanToken(text: string, index: number): string | undefined {
+  const before = [...text.slice(Math.max(0, index - 4), index)].filter((ch) => HAN.test(ch)).join("");
+  return before || undefined;
+}
+
+function intersects(a: Set<string>, b: Set<string>): boolean {
+  for (const item of a) if (b.has(item)) return true;
+  return false;
+}
+
+function setEqual(a: Set<string>, b: Set<string>): boolean {
+  if (a.size !== b.size) return false;
+  for (const item of a) if (!b.has(item)) return false;
+  return true;
+}
+
+function isSubset(a: Set<string>, b: Set<string>): boolean {
+  for (const item of a) if (!b.has(item)) return false;
+  return true;
 }
 
 export function titleScore(

@@ -1,4 +1,5 @@
 node_modules/
 dist/
 .memory/
+/.kiro/settings/mcp.json
 *.log

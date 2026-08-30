@@ -1,12 +1,18 @@
-import { existsSync, mkdirSync, readFileSync, readdirSync, unlinkSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { ensureGitignored, isGitRepo } from "./gitignore.js";
-import { entryPath, indexPath, memoryDir, slugify } from "./paths.js";
+import { entryPath, indexPath, memoryDir, slugify, topicSlug } from "./paths.js";
 import { BODY_DIVERGE, bodiesAgree, bodyScore, isCloseTopic, titleScore, TITLE_OVERLAP } from "./similarity.js";
 import { isMemoryType, type MemoryEntry, type MemoryIndexItem, type MemoryType } from "./types.js";
 
 const INDEX_LINE_LIMIT = 200;
 const INDEX_BYTE_LIMIT = 25 * 1024;
+const STORE_LOCK_NAME = ".store.lock";
+const STORE_LOCK_TTL_MS = 30_000;
+const STORE_LOCK_WAIT_MS = 2_000;
+
+let activeLock: string | undefined;
+let activeLockDepth = 0;
 
 export function listIndex(cwd?: string): MemoryIndexItem[] {
   const file = indexPath(cwd);
@@ -34,12 +40,8 @@ export function readIndexText(cwd?: string): string {
 
 export function readEntry(name: string, cwd?: string): MemoryEntry | null {
   const file = entryPath(name, cwd);
-  if (!existsSync(file)) {
-    const fallback = join(memoryDir(cwd), name.endsWith(".md") ? name : `${name}.md`);
-    if (!existsSync(fallback)) return null;
-    return parseEntry(readFileSync(fallback, "utf8"), basename(fallback, ".md"));
-  }
-  return parseEntry(readFileSync(file, "utf8"), slugify(name));
+  if (!existsSync(file)) return null;
+  return parseEntry(readFileSync(file, "utf8"), topicSlug(name));
 }
 
 export class SimilarTopicError extends Error {
@@ -55,22 +57,37 @@ export class SimilarTopicError extends Error {
   }
 }
 
+export class StoreLockError extends Error {
+  constructor(message = "project memory store is busy (.memory/.store.lock). retry after the active write finishes, or delete the lock if it is stale.") {
+    super(message);
+    this.name = "StoreLockError";
+  }
+}
+
+export class UnsafeMemoryEntryError extends Error {
+  constructor(kind: string) {
+    super(`refusing to write memory because it looks like it contains a secret (${kind}). Remove or redact the secret, then write again.`);
+    this.name = "UnsafeMemoryEntryError";
+  }
+}
+
 export function writeEntry(entry: MemoryEntry, cwd?: string): MemoryEntry {
-  // forWrite: a write must refuse an unresolvable root instead of falling
-  // back somewhere plausible. Reads inside this flow re-resolve identically.
-  const dir = memoryDir(cwd, { forWrite: true });
-  const firstCreate = !existsSync(dir);
-  mkdirSync(dir, { recursive: true });
-  if (firstCreate) ensureLedgerIgnored(dir);
+  return withStoreLock(cwd, () => writeEntryUnlocked(entry, cwd));
+}
+
+function writeEntryUnlocked(entry: MemoryEntry, cwd?: string): MemoryEntry {
   const name = slugify(entry.name);
+  assertSafeEntry(entry);
   const previous = readEntry(name, cwd);
   const saved: MemoryEntry = {
     ...entry,
     name,
+    description: oneLine(entry.description),
+    origin: entry.origin ? oneLine(entry.origin) : undefined,
     pin: entry.pin ?? previous?.pin,
     conflictWith: entry.conflictWith ?? previous?.conflictWith,
   };
-  writeFileSync(entryPath(name, cwd), renderEntry(saved), "utf8");
+  writeFileAtomic(entryPath(name, cwd), renderEntry(saved));
   upsertIndex(saved, cwd);
   return saved;
 }
@@ -97,6 +114,10 @@ export type SaveResult = MemoryEntry & {
  * A pinned topic is never overwritten; the incoming still gets a sibling file.
  */
 export function saveEntry(entry: MemoryEntry, cwd?: string): SaveResult {
+  return withStoreLock(cwd, () => saveEntryUnlocked(entry, cwd));
+}
+
+function saveEntryUnlocked(entry: MemoryEntry, cwd?: string): SaveResult {
   const name = slugify(entry.name);
   const existing = readEntry(name, cwd);
 
@@ -110,7 +131,8 @@ export function saveEntry(entry: MemoryEntry, cwd?: string): SaveResult {
   }
 
   // New slug: check nearby topics.
-  for (const other of listEntries(cwd)) {
+  const entries = listEntries(cwd);
+  for (const other of entries) {
     const bodies = bodyScore(entry.body, other.body);
     const titles = titleScore(entry, other);
     if (bodies >= BODY_DIVERGE) continue; // not a divergence; similar handled below
@@ -121,7 +143,7 @@ export function saveEntry(entry: MemoryEntry, cwd?: string): SaveResult {
     }
   }
   if (!existsSync(entryPath(name, cwd))) {
-    const hits = listEntries(cwd).filter((existingEntry) => isCloseTopic(entry, existingEntry));
+    const hits = entries.filter((existingEntry) => isCloseTopic(entry, existingEntry));
     if (hits.length) {
       throw new SimilarTopicError(hits.map((item) => ({ name: item.name, description: item.description })));
     }
@@ -145,7 +167,7 @@ function conflictWrite(
   const saved = writeEntry({ ...entry, name: newSlug, conflictWith: kept.name }, cwd);
   // Mark the kept file too, without disturbing its body: re-render with the
   // conflict pointer, and flag its index row.
-  writeFileSync(entryPath(kept.name, cwd), renderEntry({ ...kept, conflictWith: newSlug }), "utf8");
+  writeFileAtomic(entryPath(kept.name, cwd), renderEntry({ ...kept, conflictWith: newSlug }));
   flagIndexConflict(kept.name, newSlug, cwd);
   return { ...saved, conflict: { keptSlug: kept.name, newSlug } };
 }
@@ -178,18 +200,21 @@ export function forgetEntry(name: string, cwd?: string): boolean {
   // guessed project.
   const file = entryPath(name, cwd, { forWrite: true });
   if (!existsSync(file)) return false;
-  const forgotten = slugify(name);
-  unlinkSync(file);
-  // Clear dangling conflict: pointers so the index does not keep [conflict: deleted].
-  for (const entry of listEntries(cwd)) {
-    if (entry.conflictWith !== forgotten) continue;
-    writeFileSync(entryPath(entry.name, cwd), renderEntry({ ...entry, conflictWith: undefined }), "utf8");
-  }
-  const items = listIndex(cwd)
-    .filter((item) => item.name !== forgotten)
-    .map((item) => (item.conflictWith === forgotten ? { ...item, conflictWith: undefined } : item));
-  writeIndex(items, cwd);
-  return true;
+  return withStoreLock(cwd, () => {
+    if (!existsSync(file)) return false;
+    const forgotten = slugify(name);
+    unlinkSync(file);
+    // Clear dangling conflict: pointers so the index does not keep [conflict: deleted].
+    for (const entry of listEntries(cwd)) {
+      if (entry.conflictWith !== forgotten) continue;
+      writeFileAtomic(entryPath(entry.name, cwd), renderEntry({ ...entry, conflictWith: undefined }));
+    }
+    const items = listIndex(cwd)
+      .filter((item) => item.name !== forgotten)
+      .map((item) => (item.conflictWith === forgotten ? { ...item, conflictWith: undefined } : item));
+    writeIndex(items, cwd);
+    return true;
+  });
 }
 
 export function searchEntries(query: string, cwd?: string): MemoryIndexItem[] {
@@ -219,9 +244,12 @@ function flagIndexConflict(name: string, conflictWith: string, cwd?: string): vo
 }
 
 function writeIndex(items: MemoryIndexItem[], cwd?: string): void {
-  mkdirSync(memoryDir(cwd, { forWrite: true }), { recursive: true });
-  const lines = ["# MEMORY.md", "", ...items.map(indexLine), ""];
-  writeFileSync(indexPath(cwd), capIndex(lines.join("\n")), "utf8");
+  withStoreLock(cwd, () => writeIndexUnlocked(items, cwd));
+}
+
+function writeIndexUnlocked(items: MemoryIndexItem[], cwd?: string): void {
+  const lines = renderIndexLines(items);
+  writeFileAtomic(indexPath(cwd), lines.join("\n"));
 }
 
 function indexLine(item: MemoryIndexItem): string {
@@ -233,22 +261,179 @@ function indexLine(item: MemoryIndexItem): string {
 
 function capIndex(text: string): string {
   const lines = text.split(/\r?\n/);
-  let cut = text;
-  if (lines.length > INDEX_LINE_LIMIT) cut = lines.slice(0, INDEX_LINE_LIMIT).join("\n");
-  const bytes = Buffer.byteLength(cut, "utf8");
-  if (bytes > INDEX_BYTE_LIMIT) {
-    cut = Buffer.from(cut, "utf8").subarray(0, INDEX_BYTE_LIMIT).toString("utf8");
+  const kept: string[] = [];
+  let omitted = 0;
+  for (const line of lines) {
+    const candidate = [...kept, line].join("\n");
+    if (kept.length + 1 > INDEX_LINE_LIMIT || Buffer.byteLength(candidate, "utf8") > INDEX_BYTE_LIMIT) {
+      omitted += 1;
+      continue;
+    }
+    kept.push(line);
   }
-  return cut;
+  if (omitted) {
+    const marker = `- (+${omitted} more index lines; run node dist/cli.js dream --dry-run)`;
+    while (
+      kept.length + 1 > INDEX_LINE_LIMIT ||
+      Buffer.byteLength([...kept, marker].join("\n"), "utf8") > INDEX_BYTE_LIMIT
+    ) {
+      if (!kept.length) break;
+      kept.pop();
+      omitted += 1;
+    }
+    kept.push(`- (+${omitted} more index lines; run node dist/cli.js dream --dry-run)`);
+  }
+  return kept.join("\n");
+}
+
+function renderIndexLines(items: MemoryIndexItem[]): string[] {
+  const allRows = items.map(indexLine);
+  let keptCount = allRows.length <= INDEX_LINE_LIMIT - 3 ? allRows.length : INDEX_LINE_LIMIT - 4;
+  let omitted = allRows.length - keptCount;
+  let lines = buildIndexLines(allRows.slice(0, keptCount), omitted);
+  while (
+    (lines.length > INDEX_LINE_LIMIT || Buffer.byteLength(lines.join("\n"), "utf8") > INDEX_BYTE_LIMIT) &&
+    keptCount > 0
+  ) {
+    keptCount -= 1;
+    omitted = allRows.length - keptCount;
+    lines = buildIndexLines(allRows.slice(0, keptCount), omitted);
+  }
+  return lines;
+}
+
+function buildIndexLines(rows: string[], omitted: number): string[] {
+  const lines = ["# MEMORY.md", "", ...rows];
+  if (omitted > 0) lines.push(`- (+${omitted} more topics; run node dist/cli.js dream --dry-run)`);
+  lines.push("");
+  return lines;
+}
+
+function withStoreLock<T>(cwd: string | undefined, fn: () => T): T {
+  const dir = memoryDir(cwd, { forWrite: true });
+  const firstCreate = !existsSync(dir);
+  mkdirSync(dir, { recursive: true });
+  if (firstCreate) ensureLedgerIgnored(dir);
+  const lockPath = join(dir, STORE_LOCK_NAME);
+  const previousDir = process.env.PROJECT_MEMORY_DIR;
+
+  if (activeLock === lockPath) {
+    activeLockDepth += 1;
+    process.env.PROJECT_MEMORY_DIR = dir;
+    try {
+      return fn();
+    } finally {
+      activeLockDepth -= 1;
+      restoreMemoryDir(previousDir);
+    }
+  }
+
+  const release = acquireStoreLock(lockPath);
+  activeLock = lockPath;
+  activeLockDepth = 1;
+  process.env.PROJECT_MEMORY_DIR = dir;
+  try {
+    return fn();
+  } finally {
+    activeLockDepth = 0;
+    activeLock = undefined;
+    restoreMemoryDir(previousDir);
+    release();
+  }
+}
+
+function acquireStoreLock(lockPath: string): () => void {
+  const deadline = Date.now() + STORE_LOCK_WAIT_MS;
+  while (true) {
+    try {
+      const fd = openSync(lockPath, "wx");
+      writeFileSync(fd, `${JSON.stringify({ pid: process.pid, at: new Date().toISOString() })}\n`, "utf8");
+      closeSync(fd);
+      return () => {
+        try {
+          unlinkSync(lockPath);
+        } catch {
+          /* already gone */
+        }
+      };
+    } catch (error) {
+      if (!isFileExistsError(error)) throw error;
+      if (storeLockIsStale(lockPath)) {
+        try {
+          unlinkSync(lockPath);
+        } catch {
+          /* another process may have won */
+        }
+        continue;
+      }
+      if (Date.now() >= deadline) throw new StoreLockError();
+      sleepSync(25);
+    }
+  }
+}
+
+function storeLockIsStale(lockPath: string): boolean {
+  try {
+    const parsed = JSON.parse(readFileSync(lockPath, "utf8")) as { at?: string };
+    const at = parsed.at ? Date.parse(parsed.at) : NaN;
+    return !Number.isFinite(at) || Date.now() - at > STORE_LOCK_TTL_MS;
+  } catch {
+    return true;
+  }
+}
+
+function writeFileAtomic(file: string, text: string): void {
+  const tmp = join(dirname(file), `.${basename(file)}.${process.pid}.${Date.now()}.tmp`);
+  try {
+    writeFileSync(tmp, text, "utf8");
+    renameSync(tmp, file);
+  } catch (error) {
+    try {
+      unlinkSync(tmp);
+    } catch {
+      /* no temp to clean */
+    }
+    throw error;
+  }
+}
+
+function assertSafeEntry(entry: MemoryEntry): void {
+  const text = [entry.name, entry.description, entry.origin ?? "", entry.body].join("\n");
+  const patterns: [string, RegExp][] = [
+    ["OpenAI API key", /\bsk-[A-Za-z0-9_-]{20,}\b/],
+    ["GitHub token", /\bgh[pousr]_[A-Za-z0-9_]{20,}\b/],
+    ["AWS access key", /\bAKIA[0-9A-Z]{16}\b/],
+    ["private key", /-----BEGIN [A-Z ]*PRIVATE KEY-----/],
+  ];
+  for (const [kind, pattern] of patterns) {
+    if (pattern.test(text)) throw new UnsafeMemoryEntryError(kind);
+  }
+}
+
+function oneLine(value: string): string {
+  return value.replace(/\r?\n/g, " ").replace(/\s+/g, " ").trim();
+}
+
+function restoreMemoryDir(value: string | undefined): void {
+  if (value === undefined) delete process.env.PROJECT_MEMORY_DIR;
+  else process.env.PROJECT_MEMORY_DIR = value;
+}
+
+function isFileExistsError(error: unknown): boolean {
+  return Boolean(error && typeof error === "object" && "code" in error && (error as { code?: string }).code === "EEXIST");
+}
+
+function sleepSync(ms: number): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
 
 function renderEntry(entry: MemoryEntry): string {
-  const origin = entry.origin ? `\n  origin: ${entry.origin}` : "";
+  const origin = entry.origin ? `\n  origin: ${oneLine(entry.origin)}` : "";
   const pin = entry.pin ? "\npin: true" : "";
   const conflict = entry.conflictWith ? `\nconflict: ${entry.conflictWith}` : "";
   return `---
 name: ${entry.name}
-description: ${entry.description}${pin}${conflict}
+description: ${oneLine(entry.description)}${pin}${conflict}
 metadata:
   node_type: memory
   type: ${entry.type}${origin}
@@ -301,13 +486,15 @@ export function listEntries(cwd?: string): MemoryEntry[] {
 
 /** Rebuild MEMORY.md from topic files on disk. Drops stale index rows and adds orphans. */
 export function rebuildIndex(cwd?: string): MemoryIndexItem[] {
-  const items = listEntries(cwd).map((entry) => ({
-    name: entry.name,
-    description: entry.description,
-    conflictWith: entry.conflictWith,
-  }));
-  writeIndex(items, cwd);
-  return items;
+  return withStoreLock(cwd, () => {
+    const items = listEntries(cwd).map((entry) => ({
+      name: entry.name,
+      description: entry.description,
+      conflictWith: entry.conflictWith,
+    }));
+    writeIndexUnlocked(items, cwd);
+    return items;
+  });
 }
 
 export { INDEX_LINE_LIMIT, INDEX_BYTE_LIMIT };

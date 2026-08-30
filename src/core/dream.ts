@@ -154,6 +154,9 @@ export function applyDream(opts: { cwd?: string; dryRun?: boolean } = {}): Dream
   try {
     const applied: DreamOp[] = [];
     const proposed: DreamOp[] = [];
+    const entrySnapshot = listEntries(cwd);
+    const pinned = new Set(entrySnapshot.filter((entry) => entry.pin).map((entry) => entry.name));
+    const byName = new Map(entrySnapshot.map((entry) => [entry.name, entry]));
 
     for (const op of planned) {
       if (!op.safe) {
@@ -166,23 +169,23 @@ export function applyDream(opts: { cwd?: string; dryRun?: boolean } = {}): Dream
         continue;
       }
       if (op.op === "forget") {
-        const names = op.names.filter((name) => !isPinned(name, cwd));
+        const names = op.names.filter((name) => !pinned.has(name));
         if (!names.length) continue;
         for (const name of names) forgetEntry(name, cwd);
         applied.push({ ...op, names });
         continue;
       }
       if (op.op === "merge" && op.keep) {
-        if (isPinned(op.keep, cwd) === false && op.names.some((name) => name !== op.keep && isPinned(name, cwd))) {
+        if (!pinned.has(op.keep) && op.names.some((name) => name !== op.keep && pinned.has(name))) {
           proposed.push({ ...op, safe: false, reason: `${op.reason}; pinned names were left untouched` });
           continue;
         }
-        const keep = listEntries(cwd).find((entry) => entry.name === op.keep);
+        const keep = byName.get(op.keep);
         if (keep) writeEntry(keep, cwd);
         const dropped: string[] = [];
         for (const name of op.names) {
           if (name === op.keep) continue;
-          if (isPinned(name, cwd)) continue;
+          if (pinned.has(name)) continue;
           forgetEntry(name, cwd);
           dropped.push(name);
         }
@@ -238,10 +241,6 @@ function lockIsStale(file: string): boolean {
   } catch {
     return true;
   }
-}
-
-function isPinned(name: string, cwd?: string): boolean {
-  return Boolean(listEntries(cwd).find((entry) => entry.name === name)?.pin);
 }
 
 function topicAgeMs(name: string, cwd?: string): number {

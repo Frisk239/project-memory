@@ -1,16 +1,37 @@
-import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { homedir } from "node:os";
 import { ensureGitignored, isGitRepo } from "./core/gitignore.js";
-import { patchKiroAgentFrontmatter, shouldPatchKiroAgent } from "./core/kiro-agent.js";
+import {
+  asObject,
+  mergeJsonText,
+  parseJsonObject,
+  PROJECT_MEMORY_ID,
+  removeMcpServer,
+  removeProjectMemoryHookGroups,
+  removeTomlTable,
+  upsertHookGroup,
+} from "./core/host-config.js";
+import { patchKiroAgentFrontmatter, removeKiroAgentHooks, shouldPatchKiroAgent } from "./core/kiro-agent.js";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const CLI = join(ROOT, "dist", "cli.js");
 const MCP = join(ROOT, "dist", "mcp.js");
-const MARKER = "project-memory";
+const MARKER = PROJECT_MEMORY_ID;
+export const DEFAULT_AGENTS = [
+  "opencode",
+  "zcode",
+  "codex",
+  "claude",
+  "kiro",
+  "commandcode",
+  "gemini",
+  "grok",
+];
 
-export function doctorAgents(): string {
+export function doctorAgents(opts: { cwd?: string; selftest?: boolean } = {}): string {
   const lines: string[] = [];
   const ok = (name: string, pass: boolean, detail: string) =>
     lines.push(`${pass ? "ok" : "missing"}  ${name}${detail ? ` — ${detail}` : ""}`);
@@ -29,7 +50,12 @@ export function doctorAgents(): string {
   ok("codex mcp", existsSync(cxToml) && readFileSync(cxToml, "utf8").includes("project-memory"), cxToml);
   ok("skill opencode", existsSync(join(homedir(), ".config", "opencode", "skills", "project-memory", "SKILL.md")), "");
   ok("skill zcode", existsSync(join(homedir(), ".zcode", "skills", "project-memory", "SKILL.md")), "");
-  ok("skill codex", existsSync(join(homedir(), ".codex", "skills", "project-memory", "SKILL.md")), "");
+  const codexSkillPaths = [
+    join(homedir(), ".codex", "skills", "project-memory", "SKILL.md"),
+    join(homedir(), ".agents", "skills", "project-memory", "SKILL.md"),
+  ];
+  const codexSkillInstalled = codexSkillPaths.some((path) => existsSync(path));
+  ok("skill codex", codexSkillInstalled, codexSkillInstalled ? codexSkillPaths.filter((path) => existsSync(path)).join(", ") : "");
   ok("claude hooks", jsonHas(join(homedir(), ".claude", "settings.json"), MARKER), "");
   ok("claude mcp", jsonHas(join(homedir(), ".claude.json"), "project-memory"), "");
   ok("kiro mcp", jsonHas(join(homedir(), ".kiro", "settings", "mcp.json"), "project-memory"), "");
@@ -44,6 +70,13 @@ export function doctorAgents(): string {
   ok("commandcode mcp", jsonHas(join(homedir(), ".commandcode", "mcp.json"), "project-memory"), "");
   ok("gemini mcp", jsonHas(join(homedir(), ".gemini", "config", "mcp_config.json"), "project-memory"), "");
   ok("grok hooks", existsSync(join(homedir(), ".grok", "hooks", "project-memory.json")), "");
+  for (const missing of configuredMissingPaths()) {
+    ok("configured path", false, missing);
+  }
+  if (opts.selftest) {
+    const result = runHookSelftest(opts.cwd ?? process.cwd());
+    ok("selftest hook root", result.pass, result.detail);
+  }
   return lines.join("\n");
 }
 
@@ -52,10 +85,93 @@ function jsonHas(path: string, needle: string): boolean {
   return readFileSync(path, "utf8").includes(needle);
 }
 
+function configuredMissingPaths(): string[] {
+  const jsonFiles = [
+    join(homedir(), ".config", "opencode", "opencode.json"),
+    join(homedir(), ".zcode", "cli", "config.json"),
+    join(homedir(), ".codex", "hooks.json"),
+    join(homedir(), ".claude", "settings.json"),
+    join(homedir(), ".claude.json"),
+    join(homedir(), ".kiro", "settings", "mcp.json"),
+    join(homedir(), ".kiro", "hooks", "project-memory.json"),
+    join(homedir(), ".commandcode", "mcp.json"),
+    join(homedir(), ".commandcode", "settings.json"),
+    join(homedir(), ".gemini", "config", "mcp_config.json"),
+    join(homedir(), ".gemini", "settings.json"),
+    join(homedir(), ".gemini", "config", "hooks.json"),
+    join(homedir(), ".grok", "hooks", "project-memory.json"),
+  ];
+  const tomlFiles = [
+    join(homedir(), ".codex", "config.toml"),
+    join(homedir(), ".grok", "config.toml"),
+  ];
+  const paths = new Set<string>();
+  for (const file of jsonFiles) {
+    if (!existsSync(file)) continue;
+    try {
+      collectConfiguredPaths(JSON.parse(readFileSync(file, "utf8")), paths);
+    } catch {
+      /* invalid user config is reported by the host; doctor keeps scanning */
+    }
+  }
+  for (const file of tomlFiles) {
+    if (!existsSync(file)) continue;
+    collectPathsFromText(readFileSync(file, "utf8"), paths);
+  }
+  return [...paths].filter((path) => !existsSync(path));
+}
+
+function collectConfiguredPaths(value: unknown, paths: Set<string>): void {
+  if (typeof value === "string") {
+    collectPathsFromText(value, paths);
+    return;
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) collectConfiguredPaths(item, paths);
+    return;
+  }
+  if (value && typeof value === "object") {
+    for (const item of Object.values(value)) collectConfiguredPaths(item, paths);
+  }
+}
+
+function collectPathsFromText(text: string, paths: Set<string>): void {
+  if (!text.includes("project-memory") || !/dist[\\/](?:cli|mcp)\.js/i.test(text)) return;
+  for (const match of text.matchAll(/["']([^"']*project-memory[^"']*dist[\\/](?:cli|mcp)\.js)["']/gi)) {
+    paths.add(match[1]);
+  }
+  for (const match of text.matchAll(/(\S*project-memory\S*dist[\\/](?:cli|mcp)\.js)/gi)) {
+    paths.add(match[1].replace(/^[\["'({]+/g, "").replace(/[\]"'),]+$/g, ""));
+  }
+}
+
+function runHookSelftest(cwd: string): { pass: boolean; detail: string } {
+  const root = resolve(cwd);
+  const expected = join(root, ".memory");
+  const env: NodeJS.ProcessEnv = { ...process.env, PROJECT_MEMORY_ROOT: root };
+  delete env.PROJECT_MEMORY_DIR;
+  try {
+    const out = execFileSync(process.execPath, [CLI, "hook", "--event", "SessionStart", "--plain"], {
+      cwd: root,
+      env,
+      input: "",
+      encoding: "utf8",
+      timeout: 5_000,
+      windowsHide: true,
+    });
+    const pass = out.includes("Project memory") && out.includes(expected);
+    return { pass, detail: pass ? expected : `unexpected hook output for ${expected}` };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return { pass: false, detail: message };
+  }
+}
+
 export function installAgents(opts: { cwd?: string; agents: string[] }): string {
   const reports: string[] = [];
+  const agents = opts.agents.map(normalizeAgent);
   for (const agent of opts.agents) {
-    const name = agent === "antigravity" || agent === "gemini-cli" ? "gemini" : agent === "command-code" ? "commandcode" : agent;
+    const name = normalizeAgent(agent);
     if (name === "opencode") reports.push(installOpenCode());
     else if (name === "zcode") reports.push(installZcode());
     else if (name === "codex") reports.push(installCodex());
@@ -66,11 +182,34 @@ export function installAgents(opts: { cwd?: string; agents: string[] }): string 
     else if (name === "grok") reports.push(installGrok());
     else reports.push(`skip unknown agent: ${agent}`);
   }
-  reports.push(installSkill());
+  reports.push(installSkill(agents));
   if (opts.cwd && isGitRepo(opts.cwd)) {
     reports.push(`gitignore: .memory/ ${ensureGitignored(opts.cwd)}`);
   }
   return reports.join("\n");
+}
+
+export function uninstallAgents(opts: { cwd?: string; agents: string[] }): string {
+  const reports: string[] = [];
+  for (const agent of opts.agents) {
+    const name = normalizeAgent(agent);
+    if (name === "opencode") reports.push(uninstallOpenCode());
+    else if (name === "zcode") reports.push(uninstallZcode());
+    else if (name === "codex") reports.push(uninstallCodex());
+    else if (name === "claude") reports.push(uninstallClaude());
+    else if (name === "kiro") reports.push(uninstallKiro(opts.cwd));
+    else if (name === "commandcode") reports.push(uninstallCommandCode());
+    else if (name === "gemini") reports.push(uninstallGemini());
+    else if (name === "grok") reports.push(uninstallGrok());
+    else reports.push(`skip unknown agent: ${agent}`);
+  }
+  return reports.join("\n");
+}
+
+function normalizeAgent(agent: string): string {
+  if (agent === "antigravity" || agent === "gemini-cli") return "gemini";
+  if (agent === "command-code") return "commandcode";
+  return agent;
 }
 
 function installOpenCode(): string {
@@ -88,11 +227,13 @@ function installOpenCode(): string {
       command: ["node", MCP],
     };
     config.mcp = mcp;
-    const plugins = Array.isArray(config.plugin) ? [...config.plugin] : [];
-    if (!plugins.includes(pluginHref)) plugins.push(pluginHref);
-    config.plugin = plugins;
+    if (Array.isArray(config.plugin)) {
+      const plugins = config.plugin.filter((item) => item !== pluginHref);
+      if (plugins.length) config.plugin = plugins;
+      else delete config.plugin;
+    }
   });
-  return `opencode: plugin ${pluginHref} + mcp`;
+  return `opencode: plugin ${pluginHref} (auto-discovered) + mcp`;
 }
 
 function installZcode(): string {
@@ -114,7 +255,7 @@ function installZcode(): string {
           statusMessage: MARKER,
         },
       ],
-    });
+    }, CLI);
     events.Stop = upsertHookGroup(events.Stop, {
       hooks: [
         {
@@ -126,7 +267,7 @@ function installZcode(): string {
           statusMessage: MARKER,
         },
       ],
-    });
+    }, CLI);
     const compactHook = {
       type: "process",
       command: "node",
@@ -135,8 +276,8 @@ function installZcode(): string {
       timeoutMs: 5000,
       statusMessage: MARKER,
     };
-    events.PreCompact = upsertHookGroup(events.PreCompact, { hooks: [compactHook] });
-    events.PostCompact = upsertHookGroup(events.PostCompact, { hooks: [compactHook] });
+    events.PreCompact = upsertHookGroup(events.PreCompact, { hooks: [compactHook] }, CLI);
+    events.PostCompact = upsertHookGroup(events.PostCompact, { hooks: [compactHook] }, CLI);
     hooks.events = events;
     config.hooks = hooks;
     const mcp = asObject(config.mcp);
@@ -162,51 +303,25 @@ function installCodex(): string {
       hooks: [
         {
           type: "command",
-          command: `node "${CLI}" hook`,
-          commandWindows: `node "${CLI}" hook`,
+          command: `node "${CLI}" hook --flavor codex`,
+          commandWindows: `node "${CLI}" hook --flavor codex`,
           statusMessage: "Loading project memory",
           timeout: 5,
           additionalContextLimit: 2500,
         },
       ],
-    });
+    }, CLI);
     hooks.Stop = upsertHookGroup(hooks.Stop, {
       hooks: [
         {
           type: "command",
-          command: `node "${CLI}" hook`,
-          commandWindows: `node "${CLI}" hook`,
+          command: `node "${CLI}" hook --flavor codex`,
+          commandWindows: `node "${CLI}" hook --flavor codex`,
           statusMessage: "Project memory write reminder",
           timeout: 5,
         },
       ],
-    });
-    hooks.PreCompact = upsertHookGroup(hooks.PreCompact, {
-      matcher: "manual|auto",
-      hooks: [
-        {
-          type: "command",
-          command: `node "${CLI}" hook`,
-          commandWindows: `node "${CLI}" hook`,
-          statusMessage: "Flush project memory before compact",
-          timeout: 5,
-          additionalContextLimit: 2500,
-        },
-      ],
-    });
-    hooks.PostCompact = upsertHookGroup(hooks.PostCompact, {
-      matcher: "manual|auto",
-      hooks: [
-        {
-          type: "command",
-          command: `node "${CLI}" hook`,
-          commandWindows: `node "${CLI}" hook`,
-          statusMessage: "Reload project memory after compact",
-          timeout: 5,
-          additionalContextLimit: 2500,
-        },
-      ],
-    });
+    }, CLI);
     config.hooks = hooks;
   });
   const tomlPath = join(homedir(), ".codex", "config.toml");
@@ -220,25 +335,31 @@ function installCodex(): string {
   return `codex: hooks.json SessionStart/Stop + mcp`;
 }
 
-function installSkill(): string {
+function installSkill(agents: string[]): string {
   const skillSrc = join(ROOT, "skills", "project-memory", "SKILL.md");
   if (!existsSync(skillSrc)) return "skill: SKILL.md missing";
-  const targets = [
-    join(homedir(), ".config", "opencode", "skills", "project-memory", "SKILL.md"),
-    join(homedir(), ".zcode", "skills", "project-memory", "SKILL.md"),
-    join(homedir(), ".agents", "skills", "project-memory", "SKILL.md"),
-    join(homedir(), ".codex", "skills", "project-memory", "SKILL.md"),
-    join(homedir(), ".claude", "skills", "project-memory", "SKILL.md"),
-    join(homedir(), ".kiro", "skills", "project-memory", "SKILL.md"),
-    join(homedir(), ".commandcode", "skills", "project-memory", "SKILL.md"),
-    join(homedir(), ".gemini", "skills", "project-memory", "SKILL.md"),
-  ];
+  const skillAgents = skillAgentsForInstall(agents);
+  const targets = [...skillAgents].map((agent) => skillPath(agent)).filter((path): path is string => !!path);
+  if (!targets.length) return "skill: no compatible skill target";
   for (const target of targets) {
     mkdirSync(dirname(target), { recursive: true });
     copyFileSync(skillSrc, target);
   }
-  installOpenCodeDreamCommand();
-  return `skill: copied to known skill dirs (grok skipped)`;
+  if (skillAgents.has("opencode")) installOpenCodeDreamCommand();
+  return `skill: copied to ${[...skillAgents].join(", ")}`;
+}
+
+function skillAgentsForInstall(agents: string[]): Set<string> {
+  const skillAgents = new Set<string>();
+  for (const agent of agents) {
+    if (agent === "codex") {
+      skillAgents.add("codex");
+      skillAgents.add("agents");
+    } else if (skillPath(agent)) {
+      skillAgents.add(agent);
+    }
+  }
+  return skillAgents;
 }
 
 function installOpenCodeDreamCommand(): void {
@@ -296,10 +417,10 @@ function installClaude(): string {
       SessionStart: upsertHookGroup(hooks.SessionStart, {
         matcher: "startup|resume|clear|compact",
         hooks: [hookCommand()],
-      }),
-      Stop: upsertHookGroup(hooks.Stop, { hooks: [hookCommand()] }),
-      PreCompact: upsertHookGroup(hooks.PreCompact, { hooks: [hookCommand()] }),
-      PostCompact: upsertHookGroup(hooks.PostCompact, { hooks: [hookCommand()] }),
+      }, CLI),
+      Stop: upsertHookGroup(hooks.Stop, { hooks: [hookCommand()] }, CLI),
+      PreCompact: upsertHookGroup(hooks.PreCompact, { hooks: [hookCommand()] }, CLI),
+      PostCompact: upsertHookGroup(hooks.PostCompact, { hooks: [hookCommand()] }, CLI),
     });
     config.hooks = hooks;
   });
@@ -416,10 +537,10 @@ function installCommandCode(): string {
     hooks.SessionStart = upsertHookGroup(hooks.SessionStart, {
       matcher: "startup|resume|clear|compact",
       hooks: [hookCommand()],
-    });
-    hooks.Stop = upsertHookGroup(hooks.Stop, { hooks: [hookCommand()] });
-    hooks.PreCompact = upsertHookGroup(hooks.PreCompact, { hooks: [hookCommand()] });
-    hooks.PostCompact = upsertHookGroup(hooks.PostCompact, { hooks: [hookCommand()] });
+    }, CLI);
+    hooks.Stop = upsertHookGroup(hooks.Stop, { hooks: [hookCommand()] }, CLI);
+    hooks.PreCompact = upsertHookGroup(hooks.PreCompact, { hooks: [hookCommand()] }, CLI);
+    hooks.PostCompact = upsertHookGroup(hooks.PostCompact, { hooks: [hookCommand()] }, CLI);
     config.hooks = hooks;
   });
   return "commandcode: mcp.json + settings.json SessionStart/Stop/PreCompact";
@@ -432,7 +553,7 @@ function installGemini(): string {
   mergeJson(join(gemini, "settings.json"), (config) => {
     const hooks = asObject(config.hooks);
     Object.assign(hooks, claudeStyleHooks("startup|resume|clear|compact"));
-    hooks.PreCompress = upsertHookGroup(hooks.PreCompress, { hooks: [hookCommand()] });
+    hooks.PreCompress = upsertHookGroup(hooks.PreCompress, { hooks: [hookCommand()] }, CLI);
     config.hooks = hooks;
   });
   writeFileSync(
@@ -496,6 +617,211 @@ function installGrok(): string {
     }
   }
   return "grok: hooks/project-memory.json (SessionStart/PreCompact/PostCompact, no Stop) + config.toml mcp";
+}
+
+function uninstallOpenCode(): string {
+  const pluginFile = join(homedir(), ".config", "opencode", "plugins", "project-memory.js");
+  const commandFiles = [
+    join(homedir(), ".config", "opencode", "commands", "memory-dream.md"),
+  ];
+  if (process.platform === "win32" && process.env.APPDATA) {
+    commandFiles.push(join(process.env.APPDATA, "opencode", "commands", "memory-dream.md"));
+  }
+  const removedFiles = [removeFile(pluginFile), ...commandFiles.map(removeFile), removeSkill("opencode")].filter(Boolean).length;
+  const configPath = join(homedir(), ".config", "opencode", "opencode.json");
+  const configChanged = updateJson(configPath, (config) => {
+    let changed = false;
+    const mcp = asObject(config.mcp);
+    if (Object.hasOwn(mcp, MARKER)) {
+      delete mcp[MARKER];
+      config.mcp = mcp;
+      changed = true;
+    }
+    const pluginHref = pathToFileUrl(pluginFile);
+    if (Array.isArray(config.plugin)) {
+      const plugins = config.plugin.filter((item) => item !== pluginHref);
+      if (plugins.length !== config.plugin.length) {
+        if (plugins.length) config.plugin = plugins;
+        else delete config.plugin;
+        changed = true;
+      }
+    }
+    return changed;
+  });
+  return `opencode: ${removedFiles || configChanged ? "removed project-memory files/config" : "not installed"}`;
+}
+
+function uninstallZcode(): string {
+  const configPath = join(homedir(), ".zcode", "cli", "config.json");
+  const configChanged = updateJson(configPath, (config) => {
+    let changed = false;
+    const hooks = asObject(config.hooks);
+    const events = asObject(hooks.events);
+    changed = removeHookEvents(events, ["SessionStart", "Stop", "PreCompact", "PostCompact"]) || changed;
+    if (changed) {
+      hooks.events = events;
+      config.hooks = hooks;
+    }
+    const mcp = asObject(config.mcp);
+    const servers = asObject(mcp.servers);
+    if (Object.hasOwn(servers, MARKER)) {
+      delete servers[MARKER];
+      mcp.servers = servers;
+      config.mcp = mcp;
+      changed = true;
+    }
+    return changed;
+  });
+  const skillRemoved = removeSkill("zcode");
+  return `zcode: ${configChanged || skillRemoved ? "removed hooks/mcp/skill" : "not installed"}`;
+}
+
+function uninstallCodex(): string {
+  const hooksChanged = updateJson(join(homedir(), ".codex", "hooks.json"), (config) => {
+    const hooks = asObject(config.hooks);
+    const changed = removeHookEvents(hooks, ["SessionStart", "Stop", "PreCompact", "PostCompact"]);
+    if (changed) config.hooks = hooks;
+    return changed;
+  });
+  const tomlChanged = removeTomlBlock(join(homedir(), ".codex", "config.toml"), "mcp_servers.project-memory");
+  const codexSkillRemoved = removeSkill("codex");
+  const agentsSkillRemoved = removeSkill("agents");
+  const skillRemoved = codexSkillRemoved || agentsSkillRemoved;
+  return `codex: ${hooksChanged || tomlChanged || skillRemoved ? "removed hooks/mcp/skill" : "not installed"}`;
+}
+
+function uninstallClaude(): string {
+  const hooksChanged = updateJson(join(homedir(), ".claude", "settings.json"), (config) => {
+    const hooks = asObject(config.hooks);
+    const changed = removeHookEvents(hooks, ["SessionStart", "Stop", "PreCompact", "PostCompact"]);
+    if (changed) config.hooks = hooks;
+    return changed;
+  });
+  const mcpChanged = updateJson(join(homedir(), ".claude.json"), (config) => removeMcpServer(config));
+  const skillRemoved = removeSkill("claude");
+  return `claude: ${hooksChanged || mcpChanged || skillRemoved ? "removed hooks/mcp/skill" : "not installed"}`;
+}
+
+function uninstallKiro(workspace?: string): string {
+  const reports: string[] = [];
+  const userMcp = updateJson(join(homedir(), ".kiro", "settings", "mcp.json"), (config) => removeMcpServer(config));
+  reports.push(`kiro user mcp: ${userMcp ? "removed" : "not installed"}`);
+  if (workspace) {
+    const workspaceMcp = updateJson(join(resolve(workspace), ".kiro", "settings", "mcp.json"), (config) => removeMcpServer(config));
+    reports.push(`kiro workspace mcp: ${workspaceMcp ? "removed" : "not installed"}`);
+  }
+  const hooksRemoved = removeFile(join(homedir(), ".kiro", "hooks", "project-memory.json"));
+  const patched = unpatchKiroAgentFiles();
+  const skillRemoved = removeSkill("kiro");
+  reports.push(`kiro hooks/agents/skill: ${hooksRemoved || patched.length || skillRemoved ? `removed (${patched.join(", ") || "no agent files"})` : "not installed"}`);
+  return reports.join("\n");
+}
+
+function uninstallCommandCode(): string {
+  const home = join(homedir(), ".commandcode");
+  const mcpChanged = updateJson(join(home, "mcp.json"), (config) => removeMcpServer(config));
+  const hooksChanged = updateJson(join(home, "settings.json"), (config) => {
+    const hooks = asObject(config.hooks);
+    const changed = removeHookEvents(hooks, ["SessionStart", "Stop", "PreCompact", "PostCompact"]);
+    if (changed) config.hooks = hooks;
+    return changed;
+  });
+  const skillRemoved = removeSkill("commandcode");
+  return `commandcode: ${mcpChanged || hooksChanged || skillRemoved ? "removed hooks/mcp/skill" : "not installed"}`;
+}
+
+function uninstallGemini(): string {
+  const gemini = join(homedir(), ".gemini");
+  const mcpChanged = updateJson(join(gemini, "config", "mcp_config.json"), (config) => removeMcpServer(config));
+  const settingsChanged = updateJson(join(gemini, "settings.json"), (config) => {
+    const hooks = asObject(config.hooks);
+    const changed = removeHookEvents(hooks, ["SessionStart", "Stop", "PreCompact", "PostCompact", "PreCompress"]);
+    if (changed) config.hooks = hooks;
+    return changed;
+  });
+  const hookFileChanged = updateJson(join(gemini, "config", "hooks.json"), (config) => {
+    if (!Object.hasOwn(config, MARKER)) return false;
+    delete config[MARKER];
+    return true;
+  });
+  const skillRemoved = removeSkill("gemini");
+  return `gemini/antigravity: ${mcpChanged || settingsChanged || hookFileChanged || skillRemoved ? "removed hooks/mcp/skill" : "not installed"}`;
+}
+
+function uninstallGrok(): string {
+  const hooksRemoved = removeFile(join(homedir(), ".grok", "hooks", "project-memory.json"));
+  const tomlChanged = removeTomlBlock(join(homedir(), ".grok", "config.toml"), "mcp_servers.project-memory");
+  return `grok: ${hooksRemoved || tomlChanged ? "removed hooks/mcp" : "not installed"}`;
+}
+
+function removeHookEvents(container: Record<string, unknown>, events: string[]): boolean {
+  let changed = false;
+  for (const event of events) {
+    const before = container[event];
+    const after = removeProjectMemoryHookGroups(before, CLI);
+    if (Array.isArray(before) && after.length !== before.length) {
+      if (after.length) container[event] = after;
+      else delete container[event];
+      changed = true;
+    }
+  }
+  return changed;
+}
+
+function removeFile(path: string): boolean {
+  if (!existsSync(path)) return false;
+  rmSync(path, { force: true });
+  return true;
+}
+
+function updateJson(path: string, mutate: (value: Record<string, unknown>) => boolean): boolean {
+  if (!existsSync(path)) return false;
+  const raw = readFileSync(path, "utf8");
+  const value = parseJsonObject(raw, path);
+  const changed = mutate(value);
+  if (changed) writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+  return changed;
+}
+
+function removeTomlBlock(path: string, tableName: string): boolean {
+  if (!existsSync(path)) return false;
+  const raw = readFileSync(path, "utf8");
+  const result = removeTomlTable(raw, tableName);
+  if (result.removed) writeFileSync(path, result.text.endsWith("\n") ? result.text : `${result.text}\n`, "utf8");
+  return result.removed;
+}
+
+function removeSkill(agent: string): boolean {
+  const file = skillPath(agent);
+  return file ? removeFile(file) : false;
+}
+
+function skillPath(agent: string): string | undefined {
+  if (agent === "opencode") return join(homedir(), ".config", "opencode", "skills", "project-memory", "SKILL.md");
+  if (agent === "zcode") return join(homedir(), ".zcode", "skills", "project-memory", "SKILL.md");
+  if (agent === "agents") return join(homedir(), ".agents", "skills", "project-memory", "SKILL.md");
+  if (agent === "codex") return join(homedir(), ".codex", "skills", "project-memory", "SKILL.md");
+  if (agent === "claude") return join(homedir(), ".claude", "skills", "project-memory", "SKILL.md");
+  if (agent === "kiro") return join(homedir(), ".kiro", "skills", "project-memory", "SKILL.md");
+  if (agent === "commandcode") return join(homedir(), ".commandcode", "skills", "project-memory", "SKILL.md");
+  if (agent === "gemini") return join(homedir(), ".gemini", "skills", "project-memory", "SKILL.md");
+  return undefined;
+}
+
+function unpatchKiroAgentFiles(): string[] {
+  const dir = join(homedir(), ".kiro", "agents");
+  if (!existsSync(dir)) return [];
+  const patched: string[] = [];
+  for (const ent of readdirSync(dir, { withFileTypes: true })) {
+    if (!ent.isFile()) continue;
+    const file = join(dir, ent.name);
+    const raw = readFileSync(file, "utf8");
+    const next = removeKiroAgentHooks(raw, CLI);
+    if (!next || next === raw) continue;
+    writeFileSync(file, next, "utf8");
+    patched.push(ent.name);
+  }
+  return patched;
 }
 
 function pathToFileUrl(file: string): string {
@@ -564,27 +890,5 @@ export default ProjectMemory;
 
 function mergeJson(path: string, mutate: (value: Record<string, unknown>) => void): void {
   const raw = existsSync(path) ? readFileSync(path, "utf8") : "{}";
-  const parsed = raw.trim() ? JSON.parse(raw) : {};
-  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
-    throw new Error(`cannot merge non-object json: ${path}`);
-  }
-  const value = parsed as Record<string, unknown>;
-  mutate(value);
-  writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`, "utf8");
-}
-
-function asObject(value: unknown): Record<string, unknown> {
-  if (value && typeof value === "object" && !Array.isArray(value)) return value as Record<string, unknown>;
-  return {};
-}
-
-function upsertHookGroup(existing: unknown, group: Record<string, unknown>): unknown[] {
-  const list = Array.isArray(existing) ? [...existing] : [];
-  const next = list.filter((item) => !containsMarker(item));
-  next.push(group);
-  return next;
-}
-
-function containsMarker(value: unknown): boolean {
-  return JSON.stringify(value).includes(MARKER) || JSON.stringify(value).includes(CLI.replaceAll("\\", "\\\\"));
+  writeFileSync(path, mergeJsonText(raw, mutate, path), "utf8");
 }

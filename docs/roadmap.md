@@ -1,6 +1,6 @@
 # Improvement roadmap
 
-> **Superseded in part by ADR-0001–0005 and `docs/implementation-plan.md`.** The shipped shape is a project-local, **gitignored-by-default** ledger shared **by path**, with **organize at write** and **conflict = both stay, tell the owner**. Extract happens in-session after a round (no sidecar). The Phase 2/3 `/memory` `/remember` UI, search snippets, supersede/audit trail, and any auto-dream loop below are **not** this work — treat them as ideas, not commitments. Where this doc says "in git", read "shared by path, gitignored by default".
+> **Superseded by `docs/tech-debt-and-roadmap.md`, ADR-0001–0005, and the shipped implementation.** The shipped shape is a project-local, **gitignored-by-default** ledger shared **by path**, with **organize at write** and **conflict = both stay, tell the owner**. Extract happens in-session after a round (no sidecar). The Phase 2/3 `/memory` `/remember` UI, search snippets, supersede/audit trail, and any auto-dream loop below are **not** this work — treat them as ideas, not commitments. Where this doc says "in git", read "shared by path, gitignored by default".
 
 Project-scoped development ledger, shared by path (gitignored by default). OpenCode and Kiro are the primary hosts.
 

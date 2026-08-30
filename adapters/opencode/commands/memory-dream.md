@@ -4,7 +4,7 @@ description: Consolidate project .memory files (dream) — dedupe, drop empty, f
 
 Consolidate this project's `.memory/` store. Follow Claude Code Auto-Dream and Mem0 `/mem0-dream` practice: merge duplicates, drop empty/stale chatter, never invent facts, never auto-resolve true conflicts.
 
-1. Call MCP `memory_dream` with `dryRun: true` (or run `npx project-memory dream --dry-run` in the project root).
+1. Call MCP `memory_dream` with `dryRun: true` (or run `node dist/cli.js dream --dry-run` from the project-memory checkout).
 2. Show the report. Safe ops are index rebuild, empty-file delete, and identical-body merges. Pinned topics stay. Stale TODO/Next (>14 days) and relative dates are proposed only.
 3. If the user did not pass `apply` as an argument, stop after the dry-run unless they confirm.
 4. Call `memory_dream` with `dryRun: false` to apply **safe** ops only. If a lock error is returned, wait or tell the user `.memory/.dream.lock` is held.

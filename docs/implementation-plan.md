@@ -1,5 +1,7 @@
 # Implementation plan: ZCode-shaped extract (write-time organize)
 
+> **Superseded by `docs/tech-debt-and-roadmap.md` and the shipped implementation.** This file records the original slice plan only.
+
 Dispatch this document to a new session. Product decisions are locked. Do not reopen them. Do not add a Dream job, sidecar extract runtime, doorbell, or auto-apply LLM merge.
 
 Normative language: `CONTEXT.md`, `docs/adr/0001`–`0005`. If this plan and an ADR disagree, the ADR wins.
@@ -100,7 +102,7 @@ Rewrite `WRITE_RULES` / `WRITE_REMINDER` / skill so they match Extract:
 - If `memory_write` returns similar-topic: retry **that** slug.
 - If it returns **conflict**: tell the owner both slugs; do not merge; do not delete.
 - Skip code, git, AGENTS.md, secrets. Empty ledger is fine.
-- Remove or bury the Dream section as “optional CLI `project-memory dream --dry-run`”, not a trigger table row.
+- Remove or bury the Dream section as “optional CLI `node dist/cli.js dream --dry-run`”, not a trigger table row.
 
 OpenCode: keep `experimental.chat.system.transform` inject (this **is** extract for OpenCode — no Stop). Do **not** turn `session.idle` into a writer. Idle stays log-only.
 

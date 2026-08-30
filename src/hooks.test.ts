@@ -130,6 +130,29 @@ test("Claude Stop still injects the write reminder", () => {
   assert.match(text, /memory_write/);
 });
 
+test("Codex Stop uses one block continuation instead of additionalContext", () => {
+  const out = handleHook({ hook_event_name: "Stop", stop_hook_active: false }, { flavor: "codex" });
+  assert.deepEqual(Object.keys(out ?? {}).sort(), ["decision", "reason"]);
+  assert.equal((out as { decision: string }).decision, "block");
+  assert.match((out as { reason: string }).reason, /memory_write/);
+  assert.equal(handleHook({ hook_event_name: "Stop", stop_hook_active: true }, { flavor: "codex" }), null);
+});
+
+test("Codex compact hooks do not emit unsupported additionalContext", () => {
+  assert.equal(handleHook({ hook_event_name: "PreCompact" }, { flavor: "codex" }), null);
+  assert.equal(handleHook({ hook_event_name: "PostCompact" }, { flavor: "codex" }), null);
+});
+
+test("Codex SessionStart still injects project memory context", () => {
+  const dir = mkdtempSync(join(tmpdir(), "pmem-codex-"));
+  dirs.push(dir);
+  process.env.PROJECT_MEMORY_DIR = dir;
+  writeEntry({ name: "codex-topic", description: "Codex inject works", type: "project", body: "x" });
+  const out = handleHook({ hook_event_name: "SessionStart", cwd: dir }, { flavor: "codex" });
+  assert.match(JSON.stringify(out), /codex-topic/);
+  assert.match(JSON.stringify(out), /hookSpecificOutput/);
+});
+
 test("workspaceRoot is used when cwd is missing", () => {
   const dir = mkdtempSync(join(tmpdir(), "pmem-ws-"));
   dirs.push(dir);
@@ -159,6 +182,7 @@ test("injected rules treat memories as snapshots and forbid secrets; index has n
   assert.match(skill, /live repo/i);
   assert.match(skill, /current user instructions/i);
   assert.match(skill, /secret/i);
+  assert.doesNotMatch(skill, /CLI:\s*`project-memory\s/);
 });
 
 test("Antigravity PreInvocation injects ephemeralMessage each call", () => {

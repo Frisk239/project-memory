@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -132,17 +133,20 @@ export function indexPath(cwd?: string, opts: ResolveOptions = {}): string {
 }
 
 export function entryPath(name: string, cwd?: string, opts: ResolveOptions = {}): string {
-  return join(memoryDir(cwd, opts), `${slugify(name)}.md`);
+  return join(memoryDir(cwd, opts), `${topicSlug(name)}.md`);
+}
+
+export function topicSlug(name: string): string {
+  return slugify(name.trim().replace(/\.md$/i, ""));
 }
 
 export function slugify(name: string): string {
-  // Keep Han so a Chinese-only name does not collapse to the fallback "memory"
-  // (two topics would otherwise share one file and skip conflict). Latin slugs
-  // unchanged. Ceiling: other non-latin scripts still drop.
+  const raw = name.trim();
   const slug = name
     .trim()
     .toLowerCase()
-    .replace(/[^\p{Script=Han}a-z0-9]+/gu, "-")
+    .replace(/[^\p{L}\p{N}]+/gu, "-")
     .replace(/^-+|-+$/g, "");
-  return slug || "memory";
+  if (slug) return slug;
+  return raw ? `memory-${createHash("sha1").update(raw).digest("hex").slice(0, 8)}` : "memory";
 }

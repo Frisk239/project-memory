@@ -13,6 +13,7 @@ import {
   saveEntry,
   searchEntries,
   SimilarTopicError,
+  UnsafeMemoryEntryError,
   writeEntry,
 } from "./core/store.js";
 
@@ -63,6 +64,44 @@ test("forget removes file and index row", () => {
   assert.equal(forgetEntry("tmp-note"), true);
   assert.equal(listIndex().length, 0);
   assert.equal(readEntry("tmp-note"), null);
+});
+
+test("readEntry cannot escape the ledger with a raw filename fallback", () => {
+  isolated();
+  writeEntry({ name: "safe-topic", description: "Safe", type: "project", body: "stays in the ledger" });
+  assert.equal(readEntry("../README.md"), null);
+  assert.equal(readEntry("safe-topic.md")?.name, "safe-topic");
+});
+
+test("writeEntry rejects likely secrets before touching the ledger", () => {
+  isolated();
+  assert.throws(
+    () =>
+      writeEntry({
+        name: "secret-test",
+        description: "Should not write",
+        type: "project",
+        body: "temporary key sk-abcdefghijklmnopqrstuvwxyz123456",
+      }),
+    UnsafeMemoryEntryError,
+  );
+  assert.equal(listIndex().length, 0);
+  assert.equal(readEntry("secret-test"), null);
+});
+
+test("frontmatter fields are kept single-line", () => {
+  isolated();
+  writeEntry({
+    name: "frontmatter-safe",
+    description: "first\norigin: injected",
+    type: "project",
+    body: "body",
+    origin: "mcp\npin: true",
+  });
+  const raw = readFileSync(entryPath("frontmatter-safe"), "utf8");
+  assert.match(raw, /description: first origin: injected/);
+  assert.match(raw, /origin: mcp pin: true/);
+  assert.doesNotMatch(raw, /\ndescription: first\norigin:/);
 });
 
 const PNPM_BODY =
@@ -181,6 +220,25 @@ test("same slug, diverging body → sibling written, original untouched, both ma
   assert.ok(idx.every((i) => i.conflictWith));
   // sanity: originalBytes actually differed from post-write (pointer added)
   assert.notEqual(originalBytes, readFileSync(entryPath("pkg-mgr"), "utf8"));
+});
+
+test("same slug, negated high-overlap body → conflict sibling", () => {
+  isolated();
+  saveEntry({
+    name: "package-manager",
+    description: "Package manager rule",
+    type: "project",
+    body: "Use pnpm for installs in this repo.",
+  });
+  const result = saveEntry({
+    name: "package-manager",
+    description: "Package manager rule",
+    type: "project",
+    body: "Do not use pnpm for installs in this repo.",
+  });
+  assert.ok(result.conflict);
+  assert.match(readEntry("package-manager")?.body ?? "", /^Use pnpm/);
+  assert.match(readEntry(result.conflict?.newSlug ?? "")?.body ?? "", /^Do not use pnpm/);
 });
 
 test("new slug, title-overlap + diverging body → both stay under own slugs, marked", () => {
@@ -374,4 +432,20 @@ test("rebuildIndex keeps conflictWith from topic frontmatter", () => {
   assert.equal(idx.length, 2);
   assert.ok(idx.every((item) => item.conflictWith), "index rows should still be flagged after rebuild");
   assert.match(readFileSync(indexPath(), "utf8"), /\[conflict:/);
+});
+
+test("large indexes truncate on whole lines with a visible omitted marker", () => {
+  isolated();
+  for (let i = 0; i < 205; i += 1) {
+    writeEntry({
+      name: `topic-${i}`,
+      description: `中文描述 ${i} `.repeat(40),
+      type: "project",
+      body: `durable fact ${i}`,
+    });
+  }
+  const text = readFileSync(indexPath(), "utf8");
+  assert.match(text, /\(\+\d+ more topics; run node dist\/cli\.js dream --dry-run\)/);
+  assert.ok(text.split(/\r?\n/).length <= 200);
+  assert.doesNotMatch(text, /\uFFFD/);
 });

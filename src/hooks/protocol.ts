@@ -1,6 +1,6 @@
 import { compactFlush, postCompactContext, sessionContext, stopReminder } from "./context.js";
 
-export type HookFlavor = "claude" | "antigravity" | "grok";
+export type HookFlavor = "claude" | "codex" | "antigravity" | "grok";
 
 export type HookInput = {
   hook_event_name?: string;
@@ -19,6 +19,7 @@ export type HookInput = {
   fullyIdle?: boolean;
   toolCall?: unknown;
   stopHookActive?: boolean;
+  stop_hook_active?: boolean;
   permissionMode?: string;
 };
 
@@ -49,9 +50,11 @@ export function handleHook(input: HookInput, options?: HandleHookOptions): Recor
   const cwd = resolveCwd(input);
   const flavor = resolveFlavor(input, options);
   if (COMPACT_FLUSH_EVENTS.has(event)) {
+    if (flavor === "codex") return null;
     return formatOutput(flavor, event, compactFlush());
   }
   if (POST_COMPACT_EVENTS.has(event)) {
+    if (flavor === "codex") return null;
     return formatOutput(flavor, event, postCompactContext(cwd));
   }
   if (INJECT_EVENTS.has(event)) {
@@ -64,6 +67,10 @@ export function handleHook(input: HookInput, options?: HandleHookOptions): Recor
     // Grok memory writes stay in the skill + SessionStart/PreCompact context.
     if (flavor === "grok") return null;
     if (flavor === "antigravity") return { decision: "allow" };
+    if (flavor === "codex") {
+      if (input.stop_hook_active || input.stopHookActive) return null;
+      return { decision: "block", reason: stopReminder() };
+    }
     return formatOutput(flavor, event, stopReminder());
   }
   return flavor === "antigravity" ? {} : null;
@@ -89,7 +96,7 @@ export function resolveCwd(input: HookInput): string | undefined {
 
 function resolveFlavor(input: HookInput, options?: HandleHookOptions): HookFlavor {
   const requested = options?.flavor?.trim().toLowerCase();
-  if (requested === "grok" || requested === "antigravity" || requested === "claude") return requested;
+  if (requested === "grok" || requested === "antigravity" || requested === "claude" || requested === "codex") return requested;
   if (process.env.GROK_HOOK_EVENT) return "grok";
   if (isAntigravity(input)) return "antigravity";
   return "claude";
